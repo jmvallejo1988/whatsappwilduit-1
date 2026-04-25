@@ -4,6 +4,7 @@ import { sendTextMessage } from "@/lib/whatsapp";
 import { saveOutboundMessage } from "@/lib/redis";
 import { isBotActive, getBotCount, incrementBotCount, activateHumanMode, getBotConfig } from "@/lib/bot";
 import { generateBotResponse } from "@/lib/gemini";
+import { sendPushToAll } from "@/lib/push";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +58,11 @@ export async function POST(request: NextRequest) {
             contactMap[msg.from],
             parseInt(msg.timestamp) * 1000
           );
+
+          // Push notification for new message
+          const senderName = contactMap[msg.from] || `+${msg.from}`;
+          const preview = text.length > 60 ? text.slice(0, 60) + "..." : text;
+          sendPushToAll(senderName, preview, { phone: msg.from, url: `/chat/${msg.from}` }).catch(() => {});
 
           // Bot auto-response
           if (msg.type === "text") {

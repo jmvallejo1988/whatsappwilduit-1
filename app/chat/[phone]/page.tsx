@@ -17,6 +17,9 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
   const [sending, setSending] = useState(false);
   const [mode, setMode] = useState<"bot" | "human">("bot");
   const [botCount, setBotCount] = useState(0);
+  const [labels, setLabels] = useState<Array<{id:string;name:string;color:string}>>([]);
+  const [convLabelIds, setConvLabelIds] = useState<string[]>([]);
+  const [showLabels, setShowLabels] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
@@ -36,6 +39,11 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
   useEffect(() => {
     fetchMessages();
     fetchBotStatus();
+    // Fetch labels
+    Promise.all([
+      fetch("/api/labels").then(r => r.json()).then(d => setLabels(d.labels || [])),
+      fetch(`/api/conv-labels?phone=${phone}`).then(r => r.json()).then(d => setConvLabelIds(d.labelIds || [])),
+    ]).catch(()=>{});
     const i1 = setInterval(fetchMessages, 3000);
     const i2 = setInterval(fetchBotStatus, 5000);
     return () => { clearInterval(i1); clearInterval(i2); };
@@ -44,6 +52,16 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  const toggleLabel = async (labelId: string) => {
+    const res = await fetch("/api/conv-labels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone, labelId }),
+    });
+    const data = await res.json();
+    setConvLabelIds(data.labelIds || []);
+  };
 
   const sendMessage = async () => {
     if (!input.trim() || sending) return;
