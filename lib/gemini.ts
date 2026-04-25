@@ -31,7 +31,7 @@ export async function generateBotResponse(
   if (!apiKey) throw new Error("GEMINI_API_KEY not set");
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
   // Build contents array with alternating user/model turns
   const contents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> = [];
