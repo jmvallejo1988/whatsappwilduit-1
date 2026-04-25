@@ -134,7 +134,7 @@ export default function ChatListPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
                     <span className="text-white font-medium truncate">
-                      {conv.name && conv.name \!== conv.phone ? conv.name : `+${conv.phone}`}
+                      {conv.name && conv.name !== conv.phone ? conv.name : `+${conv.phone}`}
                     </span>
                     {conv.lastTimestamp > 0 && (
                       <span className="text-[#8696a0] text-xs ml-2 flex-shrink-0">

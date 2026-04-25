@@ -11,7 +11,7 @@ export async function middleware(request: NextRequest) {
   if (isPublic) return NextResponse.next();
 
   const token = request.cookies.get('auth-token')?.value;
-  if (\!token || \!(await verifyToken(token))) {
+  if (!token || !(await verifyToken(token))) {
     return NextResponse.redirect(new URL('/', request.url));
   }
 

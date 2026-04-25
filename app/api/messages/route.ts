@@ -4,7 +4,7 @@ import { sendTextMessage } from '@/lib/whatsapp';
 
 export async function GET(request: NextRequest) {
   const phone = request.nextUrl.searchParams.get('phone');
-  if (\!phone) return NextResponse.json({ error: 'Phone required' }, { status: 400 });
+  if (!phone) return NextResponse.json({ error: 'Phone required' }, { status: 400 });
 
   const messages = await getMessages(phone);
   return NextResponse.json({ messages });
@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   const { phone, text } = await request.json();
-  if (\!phone || \!text) {
+  if (!phone || !text) {
     return NextResponse.json({ error: 'Phone and text required' }, { status: 400 });
   }
 

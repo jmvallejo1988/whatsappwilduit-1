@@ -50,7 +50,7 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
   // Separate send logic from event handling to avoid type conflicts
   const sendMessage = useCallback(async () => {
     const text = input.trim();
-    if (\!text || sending) return;
+    if (!text || sending) return;
     setSending(true);
     setInput('');
     setError('');
@@ -82,7 +82,7 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && \!e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
     }
@@ -154,7 +154,7 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
             {msgs.map((msg, i) => {
               const isOut = msg.direction === 'outbound';
               const showTail =
-                i === msgs.length - 1 || msgs[i + 1]?.direction \!== msg.direction;
+                i === msgs.length - 1 || msgs[i + 1]?.direction !== msg.direction;
               return (
                 <div key={msg.id} className={`flex mb-1 ${isOut ? 'justify-end' : 'justify-start'}`}>
                   <div
@@ -203,7 +203,7 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
         />
         <button
           type="submit"
-          disabled={\!input.trim() || sending}
+          disabled={!input.trim() || sending}
           className="w-11 h-11 bg-[#00a884] rounded-full flex items-center justify-center flex-shrink-0 hover:bg-[#06cf9c] active:bg-[#05b589] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {sending ? (

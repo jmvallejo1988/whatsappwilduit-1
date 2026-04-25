@@ -22,14 +22,14 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    if (body.object \!== 'whatsapp_business_account') {
+    if (body.object !== 'whatsapp_business_account') {
       return NextResponse.json({ status: 'ok' });
     }
 
     for (const entry of body.entry ?? []) {
       for (const change of entry.changes ?? []) {
         const value = change.value;
-        if (\!value?.messages) continue;
+        if (!value?.messages) continue;
 
         // Map contact names
         const contactMap: Record<string, string> = {};

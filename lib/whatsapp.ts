@@ -1,5 +1,5 @@
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN\!;
-const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID\!;
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN!;
+const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID!;
 const API_VERSION = 'v20.0';
 
 export async function sendTextMessage(to: string, text: string) {
@@ -22,7 +22,7 @@ export async function sendTextMessage(to: string, text: string) {
     }
   );
 
-  if (\!response.ok) {
+  if (!response.ok) {
     const error = await response.json();
     throw new Error(`WhatsApp API error: ${JSON.stringify(error)}`);
   }

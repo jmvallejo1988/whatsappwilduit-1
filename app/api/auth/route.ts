@@ -6,7 +6,7 @@ const APP_PASSWORD = process.env.APP_PASSWORD || 'wilduit2024';
 export async function POST(request: NextRequest) {
   const { password } = await request.json();
 
-  if (password \!== APP_PASSWORD) {
+  if (password !== APP_PASSWORD) {
     return NextResponse.json({ error: 'Contraseña incorrecta' }, { status: 401 });
   }
 

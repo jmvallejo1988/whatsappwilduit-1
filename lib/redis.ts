@@ -94,7 +94,7 @@ export async function getMessages(phone: string, limit = 60): Promise<Message[]>
 
 export async function getConversations(): Promise<Conversation[]> {
   const phones = (await kv.zrange('conversations', 0, 49, { rev: true })) as string[];
-  if (\!phones.length) return [];
+  if (!phones.length) return [];
 
   const conversations: Conversation[] = [];
   for (const phone of phones) {
