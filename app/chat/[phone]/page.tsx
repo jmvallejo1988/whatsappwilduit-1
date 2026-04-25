@@ -1,220 +1,185 @@
-'use client';
+"use client";
 
-import { useEffect, useState, useRef, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useState, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
 
 interface Message {
   id: string;
-  from: string;
-  to: string;
   text: string;
+  direction: string;
   timestamp: number;
-  direction: 'inbound' | 'outbound';
-  status: string;
-  name?: string;
 }
 
 export default function ChatPage({ params }: { params: { phone: string } }) {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState('');
-  const [sending, setSending] = useState(false);
-  const [contactName, setContactName] = useState('');
-  const [error, setError] = useState('');
-  const endRef = useRef<HTMLDivElement>(null);
-  const router = useRouter();
   const { phone } = params;
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [mode, setMode] = useState<"bot" | "human">("bot");
+  const [botCount, setBotCount] = useState(0);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
 
   const fetchMessages = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/messages?phone=${phone}`);
-      const data = await res.json();
-      const msgs: Message[] = data.messages || [];
-      setMessages(msgs);
-      const named = msgs.find((m) => m.direction === 'inbound' && m.name);
-      if (named?.name) setContactName(named.name);
-    } catch (e) {
-      console.error(e);
-    }
+    const res = await fetch(`/api/messages?phone=${phone}`);
+    const data = await res.json();
+    setMessages(data.messages || []);
+  }, [phone]);
+
+  const fetchBotStatus = useCallback(async () => {
+    const res = await fetch(`/api/bot-status?phone=${phone}`);
+    const data = await res.json();
+    setMode(data.mode);
+    setBotCount(data.count || 0);
   }, [phone]);
 
   useEffect(() => {
     fetchMessages();
-    const interval = setInterval(fetchMessages, 3000);
-    return () => clearInterval(interval);
-  }, [fetchMessages]);
+    fetchBotStatus();
+    const i1 = setInterval(fetchMessages, 3000);
+    const i2 = setInterval(fetchBotStatus, 5000);
+    return () => { clearInterval(i1); clearInterval(i2); };
+  }, [fetchMessages, fetchBotStatus]);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Separate send logic from event handling to avoid type conflicts
-  const sendMessage = useCallback(async () => {
+  const sendMessage = async () => {
+    if (!input.trim() || sending) return;
     const text = input.trim();
-    if (!text || sending) return;
+    setInput("");
     setSending(true);
-    setInput('');
-    setError('');
-
     try {
-      const res = await fetch('/api/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      await fetch("/api/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone, text }),
       });
-      if (res.ok) {
-        await fetchMessages();
-      } else {
-        const data = await res.json();
-        setError(data.error || 'Error al enviar');
-        setInput(text);
-      }
-    } catch {
-      setError('Error de conexión');
-      setInput(text);
+      await fetchMessages();
     } finally {
       setSending(false);
     }
-  }, [input, sending, phone, fetchMessages]);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    sendMessage();
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
+  const handleTakeover = async () => {
+    await fetch("/api/bot", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "takeover", phone }),
+    });
+    setMode("human");
   };
 
-  const fmtTime = (ts: number) =>
-    new Date(ts).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
-
-  const fmtDate = (ts: number) => {
-    const d = new Date(ts);
-    const now = new Date();
-    if (d.toDateString() === now.toDateString()) return 'Hoy';
-    const yday = new Date(now);
-    yday.setDate(now.getDate() - 1);
-    if (d.toDateString() === yday.toDateString()) return 'Ayer';
-    return d.toLocaleDateString('es', { day: 'numeric', month: 'long' });
+  const handleHandback = async () => {
+    await fetch("/api/bot", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "handback", phone }),
+    });
+    setMode("bot");
+    setBotCount(0);
   };
 
-  // Group by date
-  const grouped: { date: string; msgs: Message[] }[] = [];
-  messages.forEach((msg) => {
-    const dk = new Date(msg.timestamp).toDateString();
-    const last = grouped[grouped.length - 1];
-    if (last && last.date === dk) last.msgs.push(msg);
-    else grouped.push({ date: dk, msgs: [msg] });
-  });
-
-  const displayName = contactName || `+${phone}`;
+  const formatTime = (ts: number) => {
+    return new Date(ts).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
+  };
 
   return (
-    <div className="h-screen flex flex-col max-w-md mx-auto bg-[#0b141a]">
+    <div className="h-screen bg-[#111b21] flex flex-col max-w-md mx-auto">
       {/* Header */}
-      <div className="bg-[#202c33] px-4 py-3 flex items-center gap-3 sticky top-0 z-10">
-        <button onClick={() => router.back()} className="text-[#8696a0] hover:text-white transition-colors">
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <div className="bg-[#202c33] px-3 py-2 flex items-center gap-3 sticky top-0 z-10">
+        <button onClick={() => router.push("/chat")} className="text-[#8696a0] hover:text-white p-1">
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
         </button>
-        <div className="w-10 h-10 bg-[#6b7c85] rounded-full flex items-center justify-center text-white font-semibold flex-shrink-0">
-          {displayName.charAt(0).toUpperCase()}
-        </div>
         <div className="flex-1 min-w-0">
-          <h2 className="text-white font-medium truncate">{displayName}</h2>
-          <p className="text-[#8696a0] text-xs">+{phone}</p>
+          <p className="text-white font-medium text-sm truncate">+{phone}</p>
+          <div className="flex items-center gap-1.5">
+            {mode === "bot" ? (
+              <>
+                <span className="w-2 h-2 rounded-full bg-purple-400 inline-block"></span>
+                <span className="text-purple-400 text-xs">Bot IA activo · {botCount} msgs</span>
+              </>
+            ) : (
+              <>
+                <span className="w-2 h-2 rounded-full bg-[#00a884] inline-block"></span>
+                <span className="text-[#00a884] text-xs">Asesor humano</span>
+              </>
+            )}
+          </div>
         </div>
-        <button onClick={fetchMessages} className="text-[#8696a0] hover:text-white transition-colors">
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-          </svg>
-        </button>
+        <div className="flex gap-2">
+          {mode === "bot" ? (
+            <button
+              onClick={handleTakeover}
+              className="bg-purple-600 text-white text-xs px-3 py-1.5 rounded-lg hover:bg-purple-700 transition-colors font-medium"
+            >
+              Tomar control
+            </button>
+          ) : (
+            <button
+              onClick={handleHandback}
+              className="bg-[#2a3942] text-[#8696a0] text-xs px-3 py-1.5 rounded-lg hover:bg-[#3d4a52] transition-colors"
+            >
+              Activar bot
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-3 py-2 chat-bg">
+      <div className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
         {messages.length === 0 && (
-          <div className="flex justify-center mt-8">
-            <span className="bg-[#182229] text-[#8696a0] text-xs px-4 py-2 rounded-full">
-              Sin mensajes aún
-            </span>
-          </div>
+          <div className="text-center text-[#8696a0] text-sm mt-20">Sin mensajes aún</div>
         )}
-        {grouped.map(({ date, msgs }) => (
-          <div key={date}>
-            <div className="flex justify-center my-3">
-              <span className="bg-[#182229] text-[#8696a0] text-xs px-3 py-1 rounded-full">
-                {fmtDate(msgs[0].timestamp)}
-              </span>
+        {messages.map((msg) => (
+          <div key={msg.id} className={`flex ${msg.direction === "outbound" ? "justify-end" : "justify-start"} mb-1`}>
+            <div className={`max-w-[78%] px-3 py-2 rounded-2xl text-sm ${
+              msg.direction === "outbound"
+                ? "bg-[#005c4b] text-white rounded-tr-sm"
+                : "bg-[#202c33] text-white rounded-tl-sm"
+            }`}>
+              <p className="leading-relaxed">{msg.text}</p>
+              <p className={`text-[10px] mt-1 text-right ${msg.direction === "outbound" ? "text-[#8696a0]" : "text-[#8696a0]"}`}>
+                {formatTime(msg.timestamp)}
+              </p>
             </div>
-            {msgs.map((msg, i) => {
-              const isOut = msg.direction === 'outbound';
-              const showTail =
-                i === msgs.length - 1 || msgs[i + 1]?.direction !== msg.direction;
-              return (
-                <div key={msg.id} className={`flex mb-1 ${isOut ? 'justify-end' : 'justify-start'}`}>
-                  <div
-                    className={`max-w-[78%] px-3 py-2 shadow-sm ${
-                      isOut
-                        ? `bg-[#005c4b] text-white ${showTail ? 'rounded-t-lg rounded-bl-lg' : 'rounded-lg'}`
-                        : `bg-[#202c33] text-white ${showTail ? 'rounded-t-lg rounded-br-lg' : 'rounded-lg'}`
-                    }`}
-                  >
-                    <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">{msg.text}</p>
-                    <div className="flex items-center justify-end gap-1 mt-0.5">
-                      <span className="text-[10px] text-[#8696a0]">{fmtTime(msg.timestamp)}</span>
-                      {isOut && (
-                        <svg className="w-4 h-3 text-[#53bdeb]" fill="currentColor" viewBox="0 0 16 11">
-                          <path d="M11.071.653a.75.75 0 0 1 .025 1.06L4.999 7.88 2.904 5.875a.75.75 0 1 0-1.043 1.078L4.472 9.65a.75.75 0 0 0 1.055-.012l6.49-6.563a.75.75 0 0 0-1.06-1.06z" />
-                        </svg>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
           </div>
         ))}
-        <div ref={endRef} />
+        <div ref={bottomRef} />
       </div>
 
-      {/* Error */}
-      {error && (
-        <div className="bg-red-900/50 text-red-300 text-xs text-center px-4 py-2">
-          ⚠️ {error}
-        </div>
-      )}
-
       {/* Input */}
-      <form onSubmit={handleSubmit} className="bg-[#202c33] px-3 py-3 flex items-end gap-2">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Escribe un mensaje"
-          rows={1}
-          className="flex-1 bg-[#2a3942] text-white rounded-2xl px-4 py-2.5 text-sm focus:outline-none placeholder-[#8696a0] resize-none max-h-32 overflow-y-auto"
-          disabled={sending}
-          style={{ lineHeight: '1.4' }}
-        />
-        <button
-          type="submit"
-          disabled={!input.trim() || sending}
-          className="w-11 h-11 bg-[#00a884] rounded-full flex items-center justify-center flex-shrink-0 hover:bg-[#06cf9c] active:bg-[#05b589] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {sending ? (
-            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
-          ) : (
-            <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-            </svg>
-          )}
-        </button>
-      </form>
+      <div className="bg-[#202c33] px-3 py-3 flex items-end gap-2">
+        {mode === "bot" && (
+          <div className="w-full text-center py-2 text-purple-400 text-xs bg-purple-900/20 rounded-xl">
+            El bot está respondiendo automáticamente · <button onClick={handleTakeover} className="underline">Tomar control</button>
+          </div>
+        )}
+        {mode === "human" && (
+          <>
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+              placeholder="Escribe un mensaje..."
+              rows={1}
+              className="flex-1 bg-[#2a3942] text-white rounded-2xl px-4 py-3 focus:outline-none placeholder-[#8696a0] text-sm resize-none max-h-24"
+            />
+            <button
+              onClick={sendMessage}
+              disabled={sending || !input.trim()}
+              className="w-11 h-11 bg-[#00a884] rounded-full flex items-center justify-center hover:bg-[#06cf9c] transition-colors disabled:opacity-50 flex-shrink-0"
+            >
+              <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+              </svg>
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
