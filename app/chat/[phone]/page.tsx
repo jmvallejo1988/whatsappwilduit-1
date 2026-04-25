@@ -47,8 +47,8 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Separate send logic from event handling to avoid type conflicts
+  const sendMessage = useCallback(async () => {
     const text = input.trim();
     if (\!text || sending) return;
     setSending(true);
@@ -74,6 +74,18 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
     } finally {
       setSending(false);
     }
+  }, [input, sending, phone, fetchMessages]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    sendMessage();
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && \!e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
   };
 
   const fmtTime = (ts: number) =>
@@ -83,7 +95,8 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
     const d = new Date(ts);
     const now = new Date();
     if (d.toDateString() === now.toDateString()) return 'Hoy';
-    const yday = new Date(now); yday.setDate(now.getDate() - 1);
+    const yday = new Date(now);
+    yday.setDate(now.getDate() - 1);
     if (d.toDateString() === yday.toDateString()) return 'Ayer';
     return d.toLocaleDateString('es', { day: 'numeric', month: 'long' });
   };
@@ -141,8 +154,7 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
             {msgs.map((msg, i) => {
               const isOut = msg.direction === 'outbound';
               const showTail =
-                i === msgs.length - 1 ||
-                msgs[i + 1]?.direction \!== msg.direction;
+                i === msgs.length - 1 || msgs[i + 1]?.direction \!== msg.direction;
               return (
                 <div key={msg.id} className={`flex mb-1 ${isOut ? 'justify-end' : 'justify-start'}`}>
                   <div
@@ -158,7 +170,6 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
                       {isOut && (
                         <svg className="w-4 h-3 text-[#53bdeb]" fill="currentColor" viewBox="0 0 16 11">
                           <path d="M11.071.653a.75.75 0 0 1 .025 1.06L4.999 7.88 2.904 5.875a.75.75 0 1 0-1.043 1.078L4.472 9.65a.75.75 0 0 0 1.055-.012l6.49-6.563a.75.75 0 0 0-1.06-1.06z" />
-                          <path d="M15.071.653a.75.75 0 0 1 .025 1.06l-6.097 6.167" />
                         </svg>
                       )}
                     </div>
@@ -179,16 +190,11 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
       )}
 
       {/* Input */}
-      <form onSubmit={handleSend} className="bg-[#202c33] px-3 py-3 flex items-end gap-2">
+      <form onSubmit={handleSubmit} className="bg-[#202c33] px-3 py-3 flex items-end gap-2">
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && \!e.shiftKey) {
-              e.preventDefault();
-              handleSend(e);
-            }
-          }}
+          onKeyDown={handleKeyDown}
           placeholder="Escribe un mensaje"
           rows={1}
           className="flex-1 bg-[#2a3942] text-white rounded-2xl px-4 py-2.5 text-sm focus:outline-none placeholder-[#8696a0] resize-none max-h-32 overflow-y-auto"
