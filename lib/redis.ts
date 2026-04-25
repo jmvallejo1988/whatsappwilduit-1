@@ -24,10 +24,10 @@ const OUR_NUMBER = process.env.OUR_PHONE_NUMBER || '12013619941';
 // Lazy KV client — only created when first used (avoids build-time crash)
 let _kv: ReturnType<typeof createClient> | null = null;
 function getKv() {
-  if (\!_kv) {
+  if (!_kv) {
     const url = process.env.KV_REST_API_URL;
     const token = process.env.KV_REST_API_TOKEN;
-    if (\!url || \!token) {
+    if (!url || !token) {
       throw new Error('KV_REST_API_URL and KV_REST_API_TOKEN are required');
     }
     _kv = createClient({ url, token });
@@ -112,7 +112,7 @@ export async function getMessages(phone: string, limit = 60): Promise<Message[]>
 export async function getConversations(): Promise<Conversation[]> {
   const kv = getKv();
   const phones = (await kv.zrange('conversations', 0, 49, { rev: true })) as string[];
-  if (\!phones.length) return [];
+  if (!phones.length) return [];
 
   const conversations: Conversation[] = [];
   for (const phone of phones) {
