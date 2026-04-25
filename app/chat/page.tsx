@@ -58,9 +58,17 @@ export default function ChatListPage() {
     router.push("/");
   };
 
-  const handleNewChat = () => {
+  const handleNewChat = async () => {
     const clean = newPhone.replace(/[^0-9]/g, "");
-    if (clean.length >= 7) router.push(`/chat/${clean}`);
+    if (clean.length >= 7) {
+      // Persist conversation in KV so it survives refresh
+      await fetch("/api/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: clean }),
+      });
+      router.push(`/chat/${clean}`);
+    }
   };
 
   const avatarColor = (name: string) => {
