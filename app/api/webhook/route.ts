@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { saveInboundMessage } from '@/lib/redis';
 
+export const dynamic = 'force-dynamic';
+
 const VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || 'wilduit-webhook-2024';
 
 // Meta webhook verification

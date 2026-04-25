@@ -1,4 +1,4 @@
-import { kv } from '@vercel/kv';
+import { createClient } from '@vercel/kv';
 
 export interface Message {
   id: string;
@@ -21,6 +21,20 @@ export interface Conversation {
 
 const OUR_NUMBER = process.env.OUR_PHONE_NUMBER || '12013619941';
 
+// Lazy KV client — only created when first used (avoids build-time crash)
+let _kv: ReturnType<typeof createClient> | null = null;
+function getKv() {
+  if (\!_kv) {
+    const url = process.env.KV_REST_API_URL;
+    const token = process.env.KV_REST_API_TOKEN;
+    if (\!url || \!token) {
+      throw new Error('KV_REST_API_URL and KV_REST_API_TOKEN are required');
+    }
+    _kv = createClient({ url, token });
+  }
+  return _kv;
+}
+
 export async function saveInboundMessage(
   from: string,
   text: string,
@@ -28,6 +42,7 @@ export async function saveInboundMessage(
   contactName?: string,
   timestamp?: number
 ): Promise<Message> {
+  const kv = getKv();
   const phoneKey = from.replace(/[^0-9]/g, '');
   const message: Message = {
     id: messageId,
@@ -59,6 +74,7 @@ export async function saveOutboundMessage(
   text: string,
   messageId: string
 ): Promise<Message> {
+  const kv = getKv();
   const phoneKey = to.replace(/[^0-9]/g, '');
   const message: Message = {
     id: messageId,
@@ -84,17 +100,19 @@ export async function saveOutboundMessage(
 }
 
 export async function getMessages(phone: string, limit = 60): Promise<Message[]> {
+  const kv = getKv();
   const phoneKey = phone.replace(/[^0-9]/g, '');
   const raw = await kv.lrange(`messages:${phoneKey}`, 0, limit - 1);
   const messages = raw.map((m) =>
     typeof m === 'string' ? (JSON.parse(m) as Message) : (m as Message)
   );
-  return messages.reverse(); // oldest first
+  return messages.reverse();
 }
 
 export async function getConversations(): Promise<Conversation[]> {
+  const kv = getKv();
   const phones = (await kv.zrange('conversations', 0, 49, { rev: true })) as string[];
-  if (!phones.length) return [];
+  if (\!phones.length) return [];
 
   const conversations: Conversation[] = [];
   for (const phone of phones) {
