@@ -15,54 +15,50 @@ export const DEFAULT_BOT_CONFIG: BotConfig = {
 
 Flujo de conversacion:
 - Mensaje 1: Saluda cordialmente y presentate como asistente de Wilduit Marketing
-- Mensaje 2: Pregunta en que servicio estan interesados (redes sociales, ads pagados, branding, diseno web, etc.)
+- Mensaje 2: Pregunta en que servicio estan interesados (redes sociales, ads pagados, branding, diseno web)
 - Mensaje 3: Pregunta el presupuesto mensual aproximado disponible para marketing
 - Mensaje 4: Pregunta si tienen algun lanzamiento proximo o urgencia particular
 - Mensaje 5: Agradece la informacion y avisa que un asesor los contactara pronto
 
-Reglas importantes:
-- Respuestas MUY cortas (maximo 2-3 lineas)
-- Una sola pregunta por mensaje
-- Tono profesional pero cercano y calido
-- Si preguntan precios especificos, di que un asesor los orientara con detalle
-- No inventes precios ni hagas compromisos especificos
-- Responde siempre en espanol`
+Reglas: respuestas cortas (max 2-3 lineas), una sola pregunta por mensaje, tono profesional y calido, responde siempre en espanol.`
 };
 
 export async function generateBotResponse(
   conversationHistory: Array<{ role: string; content: string }>,
   config: BotConfig
 ): Promise<string> {
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
-  const model = genAI.getGenerativeModel({
-    model: "gemini-1.5-flash",
-    systemInstruction: config.systemPrompt,
-  });
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY not set");
 
-  // Build clean alternating history for Gemini
-  // Gemini requires strictly alternating user/model turns
-  const cleanHistory: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> = [];
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
+  // Build contents array with alternating user/model turns
+  const contents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> = [];
+
+  // Add system prompt as first user message (workaround for strict alternation)
+  // We embed the system instruction directly in the first message
   for (const msg of conversationHistory) {
-    const geminiRole = msg.role === "outbound" ? "model" : "user";
-    const lastEntry = cleanHistory[cleanHistory.length - 1];
-
-    if (lastEntry && lastEntry.role === geminiRole) {
-      // Merge consecutive same-role messages
-      lastEntry.parts[0].text += "\n" + msg.content;
+    const geminiRole: "user" | "model" = msg.role === "outbound" ? "model" : "user";
+    const last = contents[contents.length - 1];
+    if (last && last.role === geminiRole) {
+      last.parts[0].text += "\n" + msg.content;
     } else {
-      cleanHistory.push({ role: geminiRole, parts: [{ text: msg.content }] });
+      contents.push({ role: geminiRole, parts: [{ text: msg.content }] });
     }
   }
 
-  // Last message must be from user - send it via sendMessage
-  const lastUserMsg = cleanHistory.pop();
-  if (!lastUserMsg) {
-    throw new Error("No user message found in history");
+  // Ensure we have at least one user message
+  if (!contents.length || contents[contents.length - 1].role !== "user") {
+    throw new Error("No user message to respond to");
   }
 
-  const chat = model.startChat({ history: cleanHistory });
-  const result = await chat.sendMessage(lastUserMsg.parts[0].text);
+  // Use generateContent with systemInstruction as a separate parameter
+  const result = await model.generateContent({
+    systemInstruction: config.systemPrompt,
+    contents,
+  });
+
   const text = result.response.text();
   if (!text) throw new Error("Empty response from Gemini");
   return text;

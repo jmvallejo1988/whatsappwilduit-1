@@ -91,7 +91,8 @@ export async function POST(request: NextRequest) {
                 }
               }
             } catch (botError) {
-              console.error("Bot error:", botError);
+              const msg = botError instanceof Error ? botError.message : String(botError);
+              console.error("Bot error full:", msg);
             }
           }
         }
