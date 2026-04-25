@@ -1,7 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyToken } from '@/lib/auth';
+import { jwtVerify } from 'jose';
 
 const PUBLIC_PATHS = ['/', '/api/webhook', '/api/auth'];
+
+async function verifyToken(token: string): Promise<boolean> {
+  try {
+    const secret = new TextEncoder().encode(
+      process.env.JWT_SECRET || 'default-secret-please-change-in-production'
+    );
+    await jwtVerify(token, secret);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
