@@ -5,6 +5,7 @@ import { saveOutboundMessage } from "@/lib/redis";
 import { isBotActive, getBotCount, incrementBotCount, activateHumanMode, getBotConfig } from "@/lib/bot";
 import { generateBotResponse } from "@/lib/openrouter";
 import { sendPushToAll } from "@/lib/push";
+import { kv } from "@vercel/kv";
 
 export const dynamic = "force-dynamic";
 
@@ -40,65 +41,68 @@ export async function POST(request: NextRequest) {
           contactMap[c.wa_id] = c.profile?.name ?? c.wa_id;
         }
 
-        for (const msg of value.messages) {
+        for (const waMsg of value.messages) {
           let text = "";
-          if (msg.type === "text") text = msg.text?.body ?? "";
-          else if (msg.type === "image") text = "Imagen";
-          else if (msg.type === "audio") text = "Audio";
-          else if (msg.type === "video") text = "Video";
-          else if (msg.type === "document") text = msg.document?.filename ?? "Documento";
-          else if (msg.type === "location") text = "Ubicacion";
-          else if (msg.type === "sticker") text = "Sticker";
-          else text = msg.type;
+          if (waMsg.type === "text") text = waMsg.text?.body ?? "";
+          else if (waMsg.type === "image") text = "Imagen";
+          else if (waMsg.type === "audio") text = "Audio";
+          else if (waMsg.type === "video") text = "Video";
+          else if (waMsg.type === "document") text = waMsg.document?.filename ?? "Documento";
+          else if (waMsg.type === "location") text = "Ubicacion";
+          else if (waMsg.type === "sticker") text = "Sticker";
+          else text = waMsg.type;
 
           await saveInboundMessage(
-            msg.from,
+            waMsg.from,
             text,
-            msg.id,
-            contactMap[msg.from],
-            parseInt(msg.timestamp) * 1000
+            waMsg.id,
+            contactMap[waMsg.from],
+            parseInt(waMsg.timestamp) * 1000
           );
 
-          // Push notification for new message
-          const senderName = contactMap[msg.from] || `+${msg.from}`;
+          const senderName = contactMap[waMsg.from] || `+${waMsg.from}`;
           const preview = text.length > 60 ? text.slice(0, 60) + "..." : text;
-          sendPushToAll(senderName, preview, { phone: msg.from, url: `/chat/${msg.from}` }).catch(() => {});
+          sendPushToAll(senderName, preview, { phone: waMsg.from, url: `/chat/${waMsg.from}` }).catch(() => {});
 
-          // Bot auto-response
-          if (msg.type === "text") {
+          // Bot auto-response — only for text messages
+          if (waMsg.type === "text") {
             try {
-              const botActive = await isBotActive(msg.from);
-              if (botActive) {
-                const config = await getBotConfig();
-                const count = await getBotCount(msg.from);
+              const config = await getBotConfig();
+              const humanMode = await kv.get(`bot:human:${waMsg.from}`);
+              const count = await getBotCount(waMsg.from);
 
-                if (count >= config.maxMessages) {
-                  // Already at limit, switch to human
-                  await activateHumanMode(msg.from);
-                } else {
-                  const messages = await getMessages(msg.from);
-                  const history = messages.map((m: { direction: string; text: string }) => ({
-                    role: m.direction,
-                    content: m.text,
-                  }));
+              // Detailed diagnostic log for every text message received
+              console.log(`BOT_CHECK phone=${waMsg.from} config.active=${config.active} humanMode=${humanMode} count=${count} maxMessages=${config.maxMessages} OPENROUTER_KEY=${!!process.env.OPENROUTER_API_KEY}`);
 
-                  const botReply = await generateBotResponse(history, config);
-                  const newCount = await incrementBotCount(msg.from);
+              const botActive = config.active && !humanMode && Number(count) < config.maxMessages;
 
-                  await sendTextMessage(msg.from, botReply);
-                  await saveOutboundMessage(msg.from, botReply, `bot_${Date.now()}`);
+              if (!botActive) {
+                console.log(`BOT_SKIP phone=${waMsg.from} reason=${!config.active ? "config_inactive" : humanMode ? "human_mode" : "count_exceeded"}`);
+              } else {
+                const messages = await getMessages(waMsg.from);
+                const history = messages.map((m: { direction: string; text: string }) => ({
+                  role: m.direction,
+                  content: m.text,
+                }));
 
-                  // If reached limit, send handoff message
-                  if (newCount >= config.maxMessages) {
-                    await activateHumanMode(msg.from);
-                    await sendTextMessage(msg.from, config.handoffMessage);
-                    await saveOutboundMessage(msg.from, config.handoffMessage, `bot_handoff_${Date.now()}`);
-                  }
+                console.log(`BOT_GENERATING phone=${waMsg.from} historyLen=${history.length}`);
+                const botReply = await generateBotResponse(history, config);
+                const newCount = await incrementBotCount(waMsg.from);
+
+                await sendTextMessage(waMsg.from, botReply);
+                await saveOutboundMessage(waMsg.from, botReply, `bot_${Date.now()}`);
+                console.log(`BOT_SENT phone=${waMsg.from} newCount=${newCount}`);
+
+                if (newCount >= config.maxMessages) {
+                  await activateHumanMode(waMsg.from);
+                  await sendTextMessage(waMsg.from, config.handoffMessage);
+                  await saveOutboundMessage(waMsg.from, config.handoffMessage, `bot_handoff_${Date.now()}`);
+                  console.log(`BOT_HANDOFF phone=${waMsg.from}`);
                 }
               }
             } catch (botError) {
-              const msg = botError instanceof Error ? botError.message : String(botError);
-              console.error("Bot error full:", msg);
+              const errMsg = botError instanceof Error ? botError.message : String(botError);
+              console.error(`BOT_ERROR phone=${waMsg.from} error=${errMsg}`);
             }
           }
         }
