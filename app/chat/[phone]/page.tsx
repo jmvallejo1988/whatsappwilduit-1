@@ -24,22 +24,27 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
   const router = useRouter();
 
   const fetchMessages = useCallback(async () => {
-    const res = await fetch(`/api/messages?phone=${phone}`);
-    const data = await res.json();
-    setMessages(data.messages || []);
+    try {
+      const res = await fetch(`/api/messages?phone=${phone}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setMessages(data.messages || []);
+    } catch (e) { console.error("fetchMessages error:", e); }
   }, [phone]);
 
   const fetchBotStatus = useCallback(async () => {
-    const res = await fetch(`/api/bot-status?phone=${phone}`);
-    const data = await res.json();
-    setMode(data.mode);
-    setBotCount(data.count || 0);
+    try {
+      const res = await fetch(`/api/bot-status?phone=${phone}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setMode(data.mode);
+      setBotCount(data.count || 0);
+    } catch (e) { console.error("fetchBotStatus error:", e); }
   }, [phone]);
 
   useEffect(() => {
     fetchMessages();
     fetchBotStatus();
-    // Fetch labels
     Promise.all([
       fetch("/api/labels").then(r => r.json()).then(d => setLabels(d.labels || [])),
       fetch(`/api/conv-labels?phone=${phone}`).then(r => r.json()).then(d => setConvLabelIds(d.labelIds || [])),
@@ -47,20 +52,22 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
     const i1 = setInterval(fetchMessages, 3000);
     const i2 = setInterval(fetchBotStatus, 5000);
     return () => { clearInterval(i1); clearInterval(i2); };
-  }, [fetchMessages, fetchBotStatus]);
+  }, [fetchMessages, fetchBotStatus, phone]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   const toggleLabel = async (labelId: string) => {
-    const res = await fetch("/api/conv-labels", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone, labelId }),
-    });
-    const data = await res.json();
-    setConvLabelIds(data.labelIds || []);
+    try {
+      const res = await fetch("/api/conv-labels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone, labelId }),
+      });
+      const data = await res.json();
+      setConvLabelIds(data.labelIds || []);
+    } catch (e) { console.error(e); }
   };
 
   const sendMessage = async () => {
@@ -75,28 +82,31 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
         body: JSON.stringify({ phone, text }),
       });
       await fetchMessages();
-    } finally {
-      setSending(false);
-    }
+    } catch (e) { console.error(e); }
+    finally { setSending(false); }
   };
 
   const handleTakeover = async () => {
-    await fetch("/api/bot", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "takeover", phone }),
-    });
-    setMode("human");
+    try {
+      await fetch("/api/bot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "takeover", phone }),
+      });
+      setMode("human");
+    } catch (e) { console.error(e); }
   };
 
   const handleHandback = async () => {
-    await fetch("/api/bot", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "handback", phone }),
-    });
-    setMode("bot");
-    setBotCount(0);
+    try {
+      await fetch("/api/bot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "handback", phone }),
+      });
+      setMode("bot");
+      setBotCount(0);
+    } catch (e) { console.error(e); }
   };
 
   const formatTime = (ts: number) => {
@@ -128,24 +138,51 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
             )}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowLabels(!showLabels)}
+            className="text-[#8696a0] hover:text-white p-1"
+            title="Etiquetas"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/>
+            </svg>
+          </button>
           {mode === "bot" ? (
-            <button
-              onClick={handleTakeover}
-              className="bg-purple-600 text-white text-xs px-3 py-1.5 rounded-lg hover:bg-purple-700 transition-colors font-medium"
-            >
+            <button onClick={handleTakeover}
+              className="bg-purple-600 text-white text-xs px-3 py-1.5 rounded-lg hover:bg-purple-700 transition-colors font-medium">
               Tomar control
             </button>
           ) : (
-            <button
-              onClick={handleHandback}
-              className="bg-[#2a3942] text-[#8696a0] text-xs px-3 py-1.5 rounded-lg hover:bg-[#3d4a52] transition-colors"
-            >
+            <button onClick={handleHandback}
+              className="bg-[#2a3942] text-[#8696a0] text-xs px-3 py-1.5 rounded-lg hover:bg-[#3d4a52] transition-colors">
               Activar bot
             </button>
           )}
         </div>
       </div>
+
+      {/* Label panel */}
+      {showLabels && labels.length > 0 && (
+        <div className="bg-[#1a2530] border-b border-[#2a3942] px-4 py-2 flex flex-wrap gap-1.5">
+          {labels.map((l) => {
+            const active = convLabelIds.includes(l.id);
+            return (
+              <button key={l.id} onClick={() => toggleLabel(l.id)}
+                className="text-xs px-2.5 py-1 rounded-full font-medium transition-all"
+                style={{
+                  backgroundColor: active ? l.color : l.color + "22",
+                  color: active ? "#fff" : l.color,
+                  border: `1px solid ${l.color}`,
+                  opacity: active ? 1 : 0.7,
+                }}>
+                {active ? "✓ " : ""}{l.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
@@ -160,7 +197,7 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
                 : "bg-[#202c33] text-white rounded-tl-sm"
             }`}>
               <p className="leading-relaxed">{msg.text}</p>
-              <p className={`text-[10px] mt-1 text-right ${msg.direction === "outbound" ? "text-[#8696a0]" : "text-[#8696a0]"}`}>
+              <p className="text-[10px] mt-1 text-right text-[#8696a0]">
                 {formatTime(msg.timestamp)}
               </p>
             </div>
@@ -173,7 +210,8 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
       <div className="bg-[#202c33] px-3 py-3 flex items-end gap-2">
         {mode === "bot" && (
           <div className="w-full text-center py-2 text-purple-400 text-xs bg-purple-900/20 rounded-xl">
-            El bot está respondiendo automáticamente · <button onClick={handleTakeover} className="underline">Tomar control</button>
+            El bot está respondiendo automáticamente ·{" "}
+            <button onClick={handleTakeover} className="underline">Tomar control</button>
           </div>
         )}
         {mode === "human" && (
@@ -186,11 +224,8 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
               rows={1}
               className="flex-1 bg-[#2a3942] text-white rounded-2xl px-4 py-3 focus:outline-none placeholder-[#8696a0] text-sm resize-none max-h-24"
             />
-            <button
-              onClick={sendMessage}
-              disabled={sending || !input.trim()}
-              className="w-11 h-11 bg-[#00a884] rounded-full flex items-center justify-center hover:bg-[#06cf9c] transition-colors disabled:opacity-50 flex-shrink-0"
-            >
+            <button onClick={sendMessage} disabled={sending || !input.trim()}
+              className="w-11 h-11 bg-[#00a884] rounded-full flex items-center justify-center hover:bg-[#06cf9c] transition-colors disabled:opacity-50 flex-shrink-0">
               <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
               </svg>

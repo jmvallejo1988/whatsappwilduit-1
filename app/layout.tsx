@@ -33,36 +33,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             __html: `
               if ('serviceWorker' in navigator) {
                 window.addEventListener('load', function() {
-                  // Limpia caches viejos y registra el SW actualizado
                   if ('caches' in window) {
                     caches.keys().then(function(names) {
                       names.forEach(function(name) {
-                        if (name !== 'wa-manager-v3') {
-                          caches.delete(name);
-                        }
+                        if (name !== 'wa-manager-v3') caches.delete(name);
                       });
                     });
                   }
-                  navigator.serviceWorker.getRegistrations().then(function(registrations) {
-                    var needsReload = false;
-                    var promises = registrations.map(function(reg) {
-                      return reg.update().catch(function() {});
-                    });
-                    Promise.all(promises).then(function() {
-                      navigator.serviceWorker.register('/sw.js').then(function(reg) {
-                        reg.addEventListener('updatefound', function() {
-                          var newWorker = reg.installing;
-                          if (newWorker) {
-                            newWorker.addEventListener('statechange', function() {
-                              if (newWorker.state === 'activated' && navigator.serviceWorker.controller) {
-                                window.location.reload();
-                              }
-                            });
-                          }
-                        });
-                      });
-                    });
-                  });
+                  navigator.serviceWorker.register('/sw.js');
                 });
               }
             `,
