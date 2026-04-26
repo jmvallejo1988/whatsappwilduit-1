@@ -133,7 +133,7 @@ export default function ChatListPage() {
 
   const avatarColor = (name: string) => {
     const colors = ["#6b7c85","#00a884","#128C7E","#075E54","#34B7F1","#7C3AED"];
-    return colors[name.charCodeAt(0) % colors.length];
+    return colors[String(name).charCodeAt(0) % colors.length];
   };
 
   const isOverdue = (ts: number) => Date.now() - ts > 24 * 60 * 60 * 1000;
@@ -263,8 +263,8 @@ export default function ChatListPage() {
                   className="flex items-center px-4 py-3 hover:bg-[#2a3942] transition-colors border-b border-[#2a3942]/50 relative">
                   {overdue && <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-orange-400"/>}
                   <div className="w-12 h-12 rounded-full flex items-center justify-center mr-3 flex-shrink-0 text-white text-lg font-semibold"
-                    style={{ backgroundColor: avatarColor(conv.name || conv.phone) }}>
-                    {(conv.name || conv.phone).charAt(0).toUpperCase()}
+                    style={{ backgroundColor: avatarColor(String(conv.name || conv.phone || "?")) }}>
+                    {String(conv.name || conv.phone || "?").charAt(0).toUpperCase()}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
