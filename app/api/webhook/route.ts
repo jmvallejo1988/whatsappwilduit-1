@@ -3,7 +3,7 @@ import { saveInboundMessage, getMessages } from "@/lib/redis";
 import { sendTextMessage } from "@/lib/whatsapp";
 import { saveOutboundMessage } from "@/lib/redis";
 import { isBotActive, getBotCount, incrementBotCount, activateHumanMode, getBotConfig } from "@/lib/bot";
-import { generateBotResponse } from "@/lib/gemini";
+import { generateBotResponse } from "@/lib/openrouter";
 import { sendPushToAll } from "@/lib/push";
 
 export const dynamic = "force-dynamic";

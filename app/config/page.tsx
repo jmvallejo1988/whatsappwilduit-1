@@ -53,7 +53,7 @@ export default function ConfigPage() {
         </button>
         <div>
           <h1 className="text-white font-semibold">Configurar Bot IA</h1>
-          <p className="text-[#8696a0] text-xs">Gemini AI · Wilduit Marketing</p>
+          <p className="text-[#8696a0] text-xs">OpenRouter AI · Wilduit Marketing</p>
         </div>
       </div>
 

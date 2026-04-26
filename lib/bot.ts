@@ -1,5 +1,5 @@
 import { kv } from "@vercel/kv";
-import { BotConfig, DEFAULT_BOT_CONFIG } from "@/lib/gemini";
+import { BotConfig, DEFAULT_BOT_CONFIG } from "@/lib/openrouter";
 
 export async function getBotConfig(): Promise<BotConfig> {
   try {

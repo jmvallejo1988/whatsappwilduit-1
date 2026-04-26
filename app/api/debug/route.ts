@@ -7,7 +7,7 @@ export async function GET() {
   const checks: Record<string, unknown> = {};
 
   // Check env vars
-  checks.GEMINI_API_KEY = process.env.GEMINI_API_KEY ? "SET (" + process.env.GEMINI_API_KEY.slice(0,8) + "...)" : "MISSING";
+  checks.OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ? "SET (" + (process.env.OPENROUTER_API_KEY || "").slice(0,12) + "...)" : "MISSING";
   checks.KV_REST_API_URL = process.env.KV_REST_API_URL ? "SET" : "MISSING";
   checks.KV_REST_API_TOKEN = process.env.KV_REST_API_TOKEN ? "SET" : "MISSING";
   checks.WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN ? "SET" : "MISSING";
