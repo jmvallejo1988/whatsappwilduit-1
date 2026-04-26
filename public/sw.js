@@ -1,4 +1,4 @@
-const CACHE_NAME = "wa-manager-v2";
+const CACHE_NAME = "wa-manager-v3";
 const OFFLINE_URLS = ["/"];
 
 self.addEventListener("install", (event) => {
