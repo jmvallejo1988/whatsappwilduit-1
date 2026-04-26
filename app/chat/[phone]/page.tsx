@@ -15,6 +15,7 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [mode, setMode] = useState<"bot" | "human">("bot");
   const [botCount, setBotCount] = useState(0);
   const [labels, setLabels] = useState<Array<{id:string;name:string;color:string}>>([]);
@@ -75,12 +76,30 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
     const text = input.trim();
     setInput("");
     setSending(true);
+    setSendError(null);
     try {
-      await fetch("/api/messages", {
+      const res = await fetch("/api/messages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone, text }),
       });
+      const data = await res.json();
+      if (data.whatsappError) {
+        // Parse the WhatsApp error for a friendly message
+        let friendly = data.whatsappError;
+        try {
+          const match = data.whatsappError.match(/WhatsApp API error: (.+)/);
+          if (match) {
+            const parsed = JSON.parse(match[1]);
+            const err = parsed?.error;
+            if (err) {
+              friendly = `[${err.code}] ${err.message}`;
+              if (err.error_data?.messaging_product) friendly += ` (${err.error_data.messaging_product})`;
+            }
+          }
+        } catch {}
+        setSendError(friendly);
+      }
       await fetchMessages();
     } catch (e) { console.error(e); }
     finally { setSending(false); }
@@ -206,6 +225,18 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
         <div ref={bottomRef} />
       </div>
 
+      {/* Send error banner */}
+      {sendError && (
+        <div className="mx-3 mb-1 px-3 py-2 bg-red-900/60 border border-red-500/50 rounded-xl flex items-start gap-2">
+          <span className="text-red-400 mt-0.5 flex-shrink-0">⚠️</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-red-300 text-xs font-medium">Error enviando a WhatsApp</p>
+            <p className="text-red-400 text-xs mt-0.5 break-all">{sendError}</p>
+          </div>
+          <button onClick={() => setSendError(null)} className="text-red-500 hover:text-red-300 flex-shrink-0 text-sm">✕</button>
+        </div>
+      )}
+
       {/* Input */}
       <div className="bg-[#202c33] px-3 py-3 flex items-end gap-2">
         {mode === "bot" && (
@@ -226,9 +257,16 @@ export default function ChatPage({ params }: { params: { phone: string } }) {
             />
             <button onClick={sendMessage} disabled={sending || !input.trim()}
               className="w-11 h-11 bg-[#00a884] rounded-full flex items-center justify-center hover:bg-[#06cf9c] transition-colors disabled:opacity-50 flex-shrink-0">
-              <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-              </svg>
+              {sending ? (
+                <svg className="w-4 h-4 text-white animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                </svg>
+              ) : (
+                <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+                </svg>
+              )}
             </button>
           </>
         )}
