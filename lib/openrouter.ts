@@ -1,92 +1,129 @@
-export interface BotConfig {
-  systemPrompt: string;
-  maxMessages: number;
-  handoffMessage: string;
-  active: boolean;
+export type BotConfig = {
+  active: boolean
+  maxMessages: number
+  handoffMessage: string
+  systemPrompt: string
 }
 
 export const DEFAULT_BOT_CONFIG: BotConfig = {
   active: true,
   maxMessages: 6,
   handoffMessage:
-    "¡Perfecto! Ya tengo todo lo que necesito 🙌 Un asesor de Wilduit Marketing te va a escribir pronto para darte una propuesta personalizada. ¡Que tengas un excelente día!",
-  systemPrompt: `Eres el asistente virtual de Wilduit Marketing, una agencia especializada en marketing digital para profesionales de salud, estética y servicios. Hablas con personas que escribieron al WhatsApp de la agencia por primera vez.
+    '¡Perfecto! Ya tengo todo lo que necesito 🙌 Un asesor de Wilduit Marketing te va a escribir pronto para coordinar tu Diagnóstico. ¡Que tengas excelente día!',
+  systemPrompt: `Eres el asistente de ventas de Wilduit Boost Digital, representando al Mgtr. Jonathan Vallejo.
 
-Tu objetivo es conocer al prospecto de forma natural y calificarlo para pasarlo a un asesor humano. NO sigas un guion rígido — adapta la conversación según lo que el cliente te diga.
+PERSONALIDAD
+- Tono cálido, directo y profesional — nunca robótico ni sobre-formal
+- Tuteas al prospecto con naturalidad
+- Máximo 3 líneas por mensaje, 1 sola pregunta a la vez
+- Emojis con moderación (1-2 por mensaje máx)
 
-CÓMO ACTUAR:
-- Si el cliente saluda o llega sin contexto: responde con calidez, preséntate brevemente y pregunta cómo puedes ayudarlo.
-- Si el cliente ya explica qué necesita: reconoce lo que dijo y profundiza en ese punto específico antes de hacer otras preguntas.
-- Sé empático y conversacional, como si fuera un chat real. Usa emojis con moderación (1-2 por mensaje máximo).
-- Mensajes cortos: máximo 3 líneas. Una sola pregunta por turno.
-- Siempre en español. Tuteo informal pero profesional.
+OBJETIVO
+Calificar al prospecto de forma natural y guiarlo a agendar el Diagnóstico de Autoridad 360° ($45 USD):
+https://calendar.app.google/KKVFQ5xXekyhEDYT8
 
-INFORMACIÓN QUE DEBES RECOPILAR (de forma natural, no como cuestionario):
-1. Qué tipo de negocio o actividad tiene
-2. Qué necesita (redes sociales, pauta publicitaria, branding, diseño web, estrategia)
-3. Si tiene urgencia o algún lanzamiento próximo
+El diagnóstico es el PRIMER PASO antes de cualquier servicio — auditoría 1 a 1, en 48h reciben Hoja de Ruta real para su negocio. Nunca lo presentes como una venta directa.
 
-No preguntes todo de golpe. Deja que fluya la conversación. Si el cliente ya dio alguno de estos datos, no lo vuelvas a preguntar.
+CÓMO CONVERSAR
+- Si el primer mensaje es un saludo simple, responde calurosamente y pregunta qué tipo de negocio tienen
+- Adapta cada respuesta al contexto — no sigas un guión fijo
+- Califica de forma conversacional: qué venden, si ya invirtieron en publicidad, qué resultados buscan
+- Con 2-3 respuestas del prospecto ya tienes contexto para presentar el Diagnóstico como siguiente paso lógico
+- Si preguntan por precios o servicios, explica que el diagnóstico es el paso previo para saber exactamente qué necesitan
+- Si quieren agendar, da el link: https://calendar.app.google/KKVFQ5xXekyhEDYT8
 
-Cuando tengas suficiente información para que un asesor pueda dar una propuesta, avisa al cliente que vas a conectarlo con el equipo.`,
-};
+LÍMITES
+- No inventes precios de otros servicios
+- No hagas promesas de resultados específicos
+- Si es muy técnico o fuera de tu alcance, di que un asesor los contactará`,
+}
 
-export async function generateBotResponse(
-  conversationHistory: Array<{ role: string; content: string }>,
-  config: BotConfig
-): Promise<string> {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) throw new Error("OPENROUTER_API_KEY not set");
+type Message = { role: 'user' | 'assistant' | 'system'; content: string }
 
-  const model = process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini";
-
-  // Build messages array in OpenAI format
-  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
-    { role: "system", content: config.systemPrompt },
-  ];
-
-  for (const msg of conversationHistory) {
-    // "inbound" = user, "outbound" = assistant (bot)
-    const role: "user" | "assistant" = msg.role === "outbound" ? "assistant" : "user";
-    const last = messages[messages.length - 1];
-
-    // Merge consecutive same-role messages
-    if (last && last.role === role) {
-      last.content += "\n" + msg.content;
+function mergeConsecutiveRoles(messages: Message[]): Message[] {
+  const merged: Message[] = []
+  for (const msg of messages) {
+    const last = merged[merged.length - 1]
+    if (last && last.role === msg.role) {
+      last.content += '\n' + msg.content
     } else {
-      messages.push({ role, content: msg.content });
+      merged.push({ ...msg })
     }
   }
+  return merged
+}
 
-  // Ensure last message is from user
-  const lastMsg = messages[messages.length - 1];
-  if (!lastMsg || lastMsg.role !== "user") {
-    throw new Error("No hay mensaje de usuario para responder");
-  }
+export async function callOpenRouter(
+  messages: Message[],
+  systemPrompt: string,
+  model?: string
+): Promise<string> {
+  const apiKey = process.env.OPENROUTER_API_KEY
+  if (!apiKey) throw new Error('OPENROUTER_API_KEY not set')
 
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
+  const allMessages: Message[] = [
+    { role: 'system', content: systemPrompt },
+    ...messages,
+  ]
+
+  const merged = mergeConsecutiveRoles(allMessages)
+
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://whatsappwilduit-1.vercel.app",
-      "X-Title": "WA Manager Wilduit",
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://whatsappwilduit-1.vercel.app',
+      'X-Title': 'Wilduit WA Manager',
     },
     body: JSON.stringify({
-      model,
-      messages,
+      model: model || process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
+      messages: merged,
       max_tokens: 200,
       temperature: 0.7,
     }),
-  });
+  })
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(`OpenRouter error ${response.status}: ${JSON.stringify(err)}`);
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`OpenRouter error ${res.status}: ${err}`)
   }
 
-  const data = await response.json();
-  const text = data.choices?.[0]?.message?.content?.trim();
-  if (!text) throw new Error("Respuesta vacía de OpenRouter");
-  return text;
+  const data = await res.json()
+  return data.choices?.[0]?.message?.content?.trim() || ''
+}
+
+export async function callOpenRouterLong(
+  prompt: string,
+  systemPrompt: string
+): Promise<string> {
+  const apiKey = process.env.OPENROUTER_API_KEY
+  if (!apiKey) throw new Error('OPENROUTER_API_KEY not set')
+
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://whatsappwilduit-1.vercel.app',
+      'X-Title': 'Wilduit WA Manager',
+    },
+    body: JSON.stringify({
+      model: process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt },
+      ],
+      max_tokens: 600,
+      temperature: 0.5,
+    }),
+  })
+
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`OpenRouter error ${res.status}: ${err}`)
+  }
+
+  const data = await res.json()
+  return data.choices?.[0]?.message?.content?.trim() || ''
 }
