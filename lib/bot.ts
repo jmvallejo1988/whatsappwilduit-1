@@ -38,12 +38,25 @@ export async function incrementBotCount(phone: string): Promise<number> {
   return count
 }
 
+export async function getBotCount(phone: string): Promise<number> {
+  return (await redis.get<number>(`bot:count:${phone}`)) ?? 0
+}
+
 export async function setHumanMode(phone: string, active: boolean): Promise<void> {
   if (active) {
     await redis.set(`bot:human:${phone}`, true)
   } else {
     await redis.del(`bot:human:${phone}`)
   }
+}
+
+// Alias for backward compatibility
+export async function activateHumanMode(phone: string): Promise<void> {
+  await setHumanMode(phone, true)
+}
+
+export async function getConversationMode(phone: string): Promise<boolean> {
+  return (await redis.get<boolean>(`bot:human:${phone}`)) ?? false
 }
 
 export async function resetPhone(phone: string): Promise<void> {
@@ -56,6 +69,15 @@ export async function saveMessage(phone: string, role: 'user' | 'assistant', con
   const msg = { role, content, ts: Date.now() }
   await redis.lpush(key, JSON.stringify(msg))
   await redis.ltrim(key, 0, 49)
+}
+
+// Aliases for backward compatibility
+export async function saveInboundMessage(phone: string, content: string): Promise<void> {
+  await saveMessage(phone, 'user', content)
+}
+
+export async function saveOutboundMessage(phone: string, content: string): Promise<void> {
+  await saveMessage(phone, 'assistant', content)
 }
 
 export async function getMessages(phone: string): Promise<Array<{ role: string; content: string; ts: number }>> {
