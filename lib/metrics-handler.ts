@@ -1,16 +1,28 @@
+/**
+ * Metrics Handler — Wilduit
+ *
+ * "ReporteWilduit" → one-shot condensed report for all managed ad accounts.
+ * Date range: 1st of current month to today.
+ */
+
 import redis from './redis'
 import {
+  AD_ACCOUNTS,
   getActiveCampaigns,
   getAccountOverview,
   getCampaignInsights,
   getTopAds,
+  getAccountCampaignsBrief,
+  currentMonthRange,
   formatBudget,
   getActionValue,
   objectiveLabel,
   type Campaign,
+  type CampaignBrief,
 } from './meta-api'
 import { callOpenRouterLong } from './openrouter'
 
+// Keywords that trigger the metrics flow
 export const METRICS_TRIGGERS = [
   'reportewilduit',
   'reporte wilduit',
@@ -18,10 +30,10 @@ export const METRICS_TRIGGERS = [
   'rw',
 ]
 
-const CMD_EXIT = ['salir', 'exit', 'cerrar', 'fin', 'stop']
-const CMD_DIAGNOSIS = ['diagnóstico', 'diagnostico', 'analiza', 'análisis', 'analisis', 'diagnostica']
-const CMD_ALL = ['todas', 'all', 'global']
-const SESSION_TTL = 60 * 60 * 2
+const CMD_EXIT       = ['salir', 'exit', 'cerrar', 'fin', 'stop']
+const CMD_DIAGNOSIS  = ['diagnóstico', 'diagnostico', 'analiza', 'análisis', 'analisis', 'diagnostica']
+const CMD_ALL        = ['todas', 'all', 'global']
+const SESSION_TTL    = 60 * 60 * 2 // 2 hours
 
 type MetricsSession = {
   phase: 1 | 2
@@ -60,12 +72,128 @@ export async function hasActiveMetricsSession(phone: string): Promise<boolean> {
   return s !== null
 }
 
+// ── Multi-account condensed report ────────────────────────────────────────────
+
+function cleanName(raw: string): string {
+  let n = raw
+    .replace(/^[-\s\[\]]+/, '')
+    .replace(/\[?\s*(TOFU|MOFU|BOFU)\s*\]?\s*/gi, '$1 ')
+    .replace(/\s*(DESDE\s+\d+|\$\d+|=\s*\$).*$/i, '')
+    .replace(/\s*\bHASTA\s+\d+\s+\w+\b.*/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+  return n.length > 32 ? n.slice(0, 30) + '\u2026' : n || raw.slice(0, 30)
+}
+
+function ratingEmoji(ctr: number, msgs: number, isMessaging: boolean): string {
+  if (isMessaging) {
+    if (msgs >= 50) return '🔥'
+    if (msgs >= 15) return '✅'
+    if (msgs >= 5)  return '📌'
+    return '⚠️'
+  }
+  if (ctr >= 5)  return '🔥'
+  if (ctr >= 2)  return '✅'
+  if (ctr >= 1)  return '📌'
+  return '⚠️'
+}
+
+function perfLabel(ctr: number, msgs: number, isMessaging: boolean): string {
+  if (isMessaging) {
+    if (msgs >= 50) return 'Excelente'
+    if (msgs >= 15) return 'Bien'
+    if (msgs >= 5)  return 'Regular'
+    return 'Bajo — revisar'
+  }
+  if (ctr >= 5)  return 'CTR excelente'
+  if (ctr >= 2)  return 'Buen CTR'
+  if (ctr >= 1)  return 'CTR normal'
+  return 'CTR bajo — revisar creative'
+}
+
+function formatCampaignLine(c: CampaignBrief): string {
+  const msgs   = parseInt(c.messages || '0')
+  const isMsg  = msgs > 0
+  const ctr    = parseFloat(c.ctr || '0')
+  const reach  = parseInt(c.reach || '0').toLocaleString('es')
+  const imp    = parseInt(c.impressions || '0').toLocaleString('es')
+  const clicks = parseInt(c.clicks || '0').toLocaleString('es')
+  const rating = ratingEmoji(ctr, msgs, isMsg)
+  const perf   = perfLabel(ctr, msgs, isMsg)
+  const name   = cleanName(c.campaign_name)
+
+  let line = `• *${name}*\n`
+  line    += `  👁 ${reach} alc · 📣 ${imp} imp · 🖱 ${clicks} clics`
+  if (isMsg) line += ` · 💬 ${msgs} msgs`
+  line    += `\n  ${rating} ${perf}`
+  return line
+}
+
+async function generateAllAccountsReport(): Promise<string> {
+  const { since, until } = currentMonthRange()
+  const monthNames = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']
+  const [, sinceMonth, sinceDay] = since.split('-')
+  const untilDay = until.split('-')[2]
+  const monthLabel = monthNames[parseInt(sinceMonth) - 1]
+
+  const lines: string[] = [
+    `📊 *ReporteWilduit* — ${parseInt(sinceDay)} al ${parseInt(untilDay)} ${monthLabel}\n`,
+  ]
+
+  const warnings: string[] = []
+
+  const results = await Promise.allSettled(
+    AD_ACCOUNTS.map(async (acc) => {
+      const campaigns = await getAccountCampaignsBrief(acc.id)
+      return { ...acc, campaigns }
+    })
+  )
+
+  for (let i = 0; i < AD_ACCOUNTS.length; i++) {
+    const acc    = AD_ACCOUNTS[i]
+    const result = results[i]
+
+    if (result.status === 'rejected') {
+      lines.push(`${acc.emoji} *${acc.name}*\n⚠️ Error al conectar\n`)
+      continue
+    }
+
+    const { campaigns } = result.value
+
+    if (campaigns.length === 0) {
+      lines.push(`${acc.emoji} *${acc.name}*\nSin actividad este mes\n`)
+      continue
+    }
+
+    lines.push(`${acc.emoji} *${acc.name}*`)
+    for (const c of campaigns) {
+      lines.push(formatCampaignLine(c))
+      const msgs  = parseInt(c.messages || '0')
+      const ctr   = parseFloat(c.ctr || '0')
+      const isMsg = msgs > 0
+      if (ratingEmoji(ctr, msgs, isMsg) === '⚠️') {
+        warnings.push(`${acc.name}: ${cleanName(c.campaign_name)}`)
+      }
+    }
+    lines.push('')
+  }
+
+  if (warnings.length > 0) {
+    lines.push(`⚠️ *Revisar:* ${warnings.join(' · ')}`)
+  }
+
+  return lines.join('\n').trim()
+}
+
+// ── Phase 1 message (legacy deep-dive flow) ───────────────────────────────────
+
 function formatPhase1(campaigns: Campaign[], overview: { spend_today: string; spend_7d: string; reach_7d: string; impressions_7d: string; clicks_7d: string; ctr_7d: string }): string {
   const lines: string[] = []
   lines.push('📊 *Reporte Wilduit* — Estado actual\n')
+
   lines.push(`💰 Gasto hoy: *$${parseFloat(overview.spend_today).toFixed(2)} USD*`)
-  lines.push(`📈 Gasto últimos 7 días: *$${parseFloat(overview.spend_7d).toFixed(2)} USD*`)
-  lines.push(`👁 Alcance 7d: *${parseInt(overview.reach_7d).toLocaleString()}* personas\n`)
+  lines.push(`📈 Gasto este mes: *$${parseFloat(overview.spend_7d).toFixed(2)} USD*`)
+  lines.push(`👁 Alcance este mes: *${parseInt(overview.reach_7d).toLocaleString()}* personas\n`)
 
   if (campaigns.length === 0) {
     lines.push('⚠️ Sin campañas activas o pausadas en este momento.')
@@ -78,7 +206,7 @@ function formatPhase1(campaigns: Campaign[], overview: { spend_today: string; sp
   if (active.length > 0) {
     lines.push(`🟢 *Campañas ACTIVAS (${active.length}):*`)
     active.forEach((c, i) => {
-      const budget = formatBudget(c)
+      const budget = c.daily_budget ? `${(parseInt(c.daily_budget) / 100).toFixed(2)}/día` : c.lifetime_budget ? `${(parseInt(c.lifetime_budget) / 100).toFixed(2)} total` : '—'
       const obj = objectiveLabel(c.objective)
       lines.push(`  ${i + 1}️⃣ ${c.name}`)
       lines.push(`     💵 ${budget} | 🎯 ${obj}`)
@@ -88,27 +216,26 @@ function formatPhase1(campaigns: Campaign[], overview: { spend_today: string; sp
   if (paused.length > 0) {
     lines.push(`\n⏸ *Campañas PAUSADAS (${paused.length}):*`)
     paused.forEach((c, i) => {
-      const obj = objectiveLabel(c.objective)
-      lines.push(`  ${active.length + i + 1}️⃣ ${c.name} | 🎯 ${obj}`)
+      lines.push(`  ${active.length + i + 1}️⃣ ${c.name} | 🎯 ${objectiveLabel(c.objective)}`)
     })
   }
 
-  lines.push('\n¿Qué campaña querés auditar? Responde con el *número* o envía *todas* para el resumen global.')
+  lines.push('\n¿Qué campaña querés auditar? Responde con el *número* o *salir* para cerrar.')
   return lines.join('\n')
 }
 
-function formatDeepDive(campaign: Campaign, insights: { spend: string; reach: string; impressions: string; clicks: string; ctr: string; cpc: string; cpm: string; frequency: string; actions?: Array<{ action_type: string; value: string }> } | null, topAds: Array<{ name: string; ctr: string }>): string {
+function formatDeepDive(campaign: Campaign, insights: Awaited<ReturnType<typeof getCampaignInsights>>, topAds: Awaited<ReturnType<typeof getTopAds>>): string {
   if (!insights) {
-    return `🔍 *${campaign.name}*\n\nSin datos disponibles para los últimos 7 días.`
+    return `🔍 *${campaign.name}*\n\nSin datos disponibles para este mes.`
   }
 
-  const leads = getActionValue(insights.actions, 'lead')
-  const messages = getActionValue(insights.actions, 'onsite_conversion.messaging_conversation_started_7d')
+  const leads      = getActionValue(insights.actions, 'lead')
+  const messages   = getActionValue(insights.actions, 'onsite_conversion.messaging_conversation_started_7d')
   const linkClicks = getActionValue(insights.actions, 'link_click')
 
   const lines: string[] = []
   lines.push(`🔍 *Deep Dive — ${campaign.name}*`)
-  lines.push(`📅 Últimos 7 días\n`)
+  lines.push(`📅 Mes actual\n`)
   lines.push(`👁 Alcance: *${parseInt(insights.reach).toLocaleString()} personas*`)
   lines.push(`📣 Impresiones: *${parseInt(insights.impressions).toLocaleString()}*`)
   lines.push(`🔁 Frecuencia: *${parseFloat(insights.frequency || '0').toFixed(2)}x*`)
@@ -118,11 +245,10 @@ function formatDeepDive(campaign: Campaign, insights: { spend: string; reach: st
   lines.push(`📡 CPM: *$${parseFloat(insights.cpm || '0').toFixed(2)}*`)
   lines.push(`💰 Gasto total: *$${parseFloat(insights.spend || '0').toFixed(2)} USD*`)
 
-  const hasResults = leads !== '0' || messages !== '0' || linkClicks !== '0'
-  if (hasResults) {
+  if (leads !== '0' || messages !== '0' || linkClicks !== '0') {
     lines.push(`\n🎯 *Resultados:*`)
-    if (leads !== '0') lines.push(`  • Leads: *${leads}*`)
-    if (messages !== '0') lines.push(`  • Mensajes iniciados: *${messages}*`)
+    if (leads !== '0')      lines.push(`  • Leads: *${leads}*`)
+    if (messages !== '0')   lines.push(`  • Mensajes iniciados: *${messages}*`)
     if (linkClicks !== '0') lines.push(`  • Link clicks: *${linkClicks}*`)
   }
 
@@ -133,20 +259,32 @@ function formatDeepDive(campaign: Campaign, insights: { spend: string; reach: st
     })
   }
 
-  lines.push('\nResponde *diagnóstico* para análisis IA, otro número para ver otra campaña, o *salir* para cerrar.')
+  lines.push('\nResponde *diagnóstico* para análisis IA, otro número para ver otra campaña, o *salir*.')
   return lines.join('\n')
 }
 
 async function generateDiagnosis(campaign: Campaign, insightsText: string): Promise<string> {
   const systemPrompt = `Eres un estratega de marketing digital experto en Meta Ads con la metodología Boost Digital de Wilduit Marketing.
+
 Tu objetivo: Analizar métricas de Meta Ads y proponer acciones inmediatas y específicas.
-Estilo: Tono juvenil, directo, tutea al lector. Máximo 5 puntos de acción. Cada punto: diagnóstico + acción específica. Usa emojis. Sin relleno. Formato para WhatsApp.`
+
+Estilo de respuesta:
+- Tono juvenil, directo, tutea al lector
+- Máximo 5 puntos de acción
+- Cada punto: diagnóstico + acción específica
+- Usa emojis de forma estratégica
+- Sin relleno, sin introducciones largas
+- Formato para WhatsApp (sin markdown complejo)`
 
   const userPrompt = `Analiza estas métricas de la campaña "${campaign.name}" (objetivo: ${objectiveLabel(campaign.objective)}) y da un diagnóstico con acciones concretas:
 
 ${insightsText}
 
-Benchmarks: CTR saludable >1% | CPM aceptable <$15 | Frecuencia 1.5-3.0 (>5 = fatiga)
+Benchmarks de referencia:
+- CTR saludable: >1% | Excelente: >2%
+- CPM aceptable: <$15 | Óptimo: <$8
+- Frecuencia: 1.5-3.0 (>5 = fatiga)
+- CPC: depende del objetivo y nicho
 
 Proporciona: (1) diagnóstico rápido, (2) 3-5 acciones concretas para optimizar.`
 
@@ -158,6 +296,8 @@ Proporciona: (1) diagnóstico rápido, (2) 3-5 acciones concretas para optimizar
   }
 }
 
+// ── Main handler ──────────────────────────────────────────────────────────────
+
 export async function handleMetricsMessage(
   phone: string,
   text: string,
@@ -167,26 +307,24 @@ export async function handleMetricsMessage(
 
   if (CMD_EXIT.some((c) => lower === c)) {
     await clearSession(phone)
-    return '✅ Sesión de métricas cerrada. Cuando quieras un nuevo reporte, escribe *ReporteWilduit*.'
+    return '✅ Sesión cerrada. Cuando quieras un nuevo reporte, escribe *ReporteWilduit*.'
   }
 
   const session = await getSession(phone)
 
+  // ── Phase 0: New trigger → condensed multi-account report ────────────────
   if (isNewTrigger || !session) {
-    let campaigns: Campaign[] = []
-    let overview
     try {
-      ;[campaigns, overview] = await Promise.all([getActiveCampaigns(), getAccountOverview()])
+      const report = await generateAllAccountsReport()
+      await clearSession(phone)
+      return report
     } catch (err) {
       console.error('META_API_ERROR', err)
       return '⚠️ Error al conectar con Meta Ads. Verifica que el token esté activo e intenta de nuevo.'
     }
-
-    const newSession: MetricsSession = { phase: 1, campaigns, ts: Date.now() }
-    await saveSession(phone, newSession)
-    return formatPhase1(campaigns, overview)
   }
 
+  // ── Phase 1: Waiting for campaign selection ────────────────────────────────
   if (session.phase === 1) {
     const { campaigns } = session
 
@@ -195,7 +333,7 @@ export async function handleMetricsMessage(
         const overview = await getAccountOverview()
         await clearSession(phone)
         return (
-          `📊 *Resumen Global Wilduit* — Últimos 7 días\n\n` +
+          `📊 *Resumen Global Wilduit* — Mes actual\n\n` +
           `💰 Gasto total: *$${parseFloat(overview.spend_7d).toFixed(2)} USD*\n` +
           `👁 Alcance: *${parseInt(overview.reach_7d).toLocaleString()} personas*\n` +
           `📣 Impresiones: *${parseInt(overview.impressions_7d).toLocaleString()}*\n` +
@@ -216,9 +354,11 @@ export async function handleMetricsMessage(
           getCampaignInsights(selected.id),
           getTopAds(selected.id),
         ])
+
         const snapshot = insights
           ? `Spend: $${insights.spend} | Reach: ${insights.reach} | Impressions: ${insights.impressions} | Clicks: ${insights.clicks} | CTR: ${insights.ctr}% | CPC: $${insights.cpc} | CPM: $${insights.cpm} | Frequency: ${insights.frequency} | Leads: ${getActionValue(insights.actions, 'lead')} | Messages: ${getActionValue(insights.actions, 'onsite_conversion.messaging_conversation_started_7d')}`
           : 'Sin datos'
+
         await saveSession(phone, { phase: 2, campaigns, selectedCampaign: selected, insightsSnapshot: snapshot, ts: Date.now() })
         return formatDeepDive(selected, insights, topAds)
       } catch {
@@ -229,12 +369,13 @@ export async function handleMetricsMessage(
     return `Responde con el número de la campaña (1-${campaigns.length}), *todas* para resumen global, o *salir* para cerrar.`
   }
 
+  // ── Phase 2: Deep dive ─────────────────────────────────────────────────────
   if (session.phase === 2) {
     const { campaigns, selectedCampaign, insightsSnapshot } = session
 
     if (CMD_DIAGNOSIS.some((c) => lower === c || lower.startsWith(c))) {
       if (!selectedCampaign) return '⚠️ Error de sesión. Escribe *ReporteWilduit* para reiniciar.'
-      return await generateDiagnosis(selectedCampaign, insightsSnapshot || 'Sin datos')
+      return generateDiagnosis(selectedCampaign, insightsSnapshot || 'Sin datos')
     }
 
     const num = parseInt(lower)
@@ -245,9 +386,11 @@ export async function handleMetricsMessage(
           getCampaignInsights(selected.id),
           getTopAds(selected.id),
         ])
+
         const snapshot = insights
           ? `Spend: $${insights.spend} | Reach: ${insights.reach} | Impressions: ${insights.impressions} | Clicks: ${insights.clicks} | CTR: ${insights.ctr}% | CPC: $${insights.cpc} | CPM: $${insights.cpm} | Frequency: ${insights.frequency} | Leads: ${getActionValue(insights.actions, 'lead')} | Messages: ${getActionValue(insights.actions, 'onsite_conversion.messaging_conversation_started_7d')}`
           : 'Sin datos'
+
         await saveSession(phone, { phase: 2, campaigns, selectedCampaign: selected, insightsSnapshot: snapshot, ts: Date.now() })
         return formatDeepDive(selected, insights, topAds)
       } catch {
