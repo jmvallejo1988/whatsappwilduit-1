@@ -11,6 +11,24 @@ function getAdAccount(): string {
   return process.env.META_AD_ACCOUNT_ID || 'act_742059521944105'
 }
 
+// All ad accounts managed by Wilduit
+export const AD_ACCOUNTS: Array<{ id: string; name: string; emoji: string }> = [
+  { id: 'act_157012131074583',   name: 'ASOINMED',        emoji: '🏥' },
+  { id: 'act_3255653561331232',  name: 'OMEGA SAMBO',     emoji: '🥊' },
+  { id: 'act_705761368458003',   name: 'ELIXIR NATURAL',  emoji: '🌿' },
+  { id: 'act_742059521944105',   name: 'WILDUIT ECUADOR', emoji: '📱' },
+  { id: 'act_1854968711885423',  name: 'NAOS PAUTAS',     emoji: '💅' },
+]
+
+// Returns { since: 'YYYY-MM-DD', until: 'YYYY-MM-DD' } from the 1st of current month to today
+export function currentMonthRange(): { since: string; until: string } {
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const since = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`
+  const until = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+  return { since, until }
+}
+
 async function metaGet(path: string, params: Record<string, string> = {}): Promise<unknown> {
   const token = getToken()
   const qs = new URLSearchParams({ ...params, access_token: token }).toString()
@@ -26,131 +44,181 @@ async function metaGet(path: string, params: Record<string, string> = {}): Promi
 export type Campaign = {
   id: string
   name: string
-  status: string
   effective_status: string
   objective: string
   daily_budget?: string
   lifetime_budget?: string
-}
-
-export async function getActiveCampaigns(): Promise<Campaign[]> {
-  const account = getAdAccount()
-  const data = await metaGet(`${account}/campaigns`, {
-    fields: 'id,name,status,effective_status,objective,daily_budget,lifetime_budget',
-    filtering: JSON.stringify([{ field: 'effective_status', operator: 'IN', value: ['ACTIVE', 'PAUSED'] }]),
-    limit: '20',
-  }) as { data: Campaign[] }
-  return data.data || []
-}
-
-export async function getAccountOverview(): Promise<{
-  spend_today: string
-  spend_7d: string
-  reach_7d: string
-  impressions_7d: string
-  clicks_7d: string
-  ctr_7d: string
-}> {
-  const account = getAdAccount()
-  const today = new Date().toISOString().split('T')[0]
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-
-  const [todayData, weekData] = await Promise.all([
-    metaGet(`${account}/insights`, {
-      fields: 'spend',
-      time_range: JSON.stringify({ since: today, until: today }),
-    }) as Promise<{ data: Array<{ spend: string }> }>,
-    metaGet(`${account}/insights`, {
-      fields: 'spend,reach,impressions,clicks,ctr',
-      time_range: JSON.stringify({ since: sevenDaysAgo, until: today }),
-    }) as Promise<{ data: Array<{ spend: string; reach: string; impressions: string; clicks: string; ctr: string }> }>,
-  ])
-
-  const t = (todayData as { data: Array<{ spend: string }> }).data?.[0]
-  const w = (weekData as { data: Array<{ spend: string; reach: string; impressions: string; clicks: string; ctr: string }> }).data?.[0]
-
-  return {
-    spend_today: t?.spend || '0',
-    spend_7d: w?.spend || '0',
-    reach_7d: w?.reach || '0',
-    impressions_7d: w?.impressions || '0',
-    clicks_7d: w?.clicks || '0',
-    ctr_7d: w?.ctr || '0',
-  }
+  budget_remaining?: string
 }
 
 export type CampaignInsights = {
+  campaign_id: string
+  campaign_name: string
   spend: string
-  reach: string
   impressions: string
+  reach: string
   clicks: string
-  ctr: string
   cpc: string
   cpm: string
+  ctr: string
   frequency: string
   actions?: Array<{ action_type: string; value: string }>
 }
 
+export type AccountOverview = {
+  spend_today: string
+  spend_7d: string
+  impressions_7d: string
+  reach_7d: string
+  clicks_7d: string
+  ctr_7d: string
+}
+
+// Returns all active campaigns with their budgets
+export async function getActiveCampaigns(): Promise<Campaign[]> {
+  const act = getAdAccount()
+  const data = await metaGet(`${act}/campaigns`, {
+    fields: 'id,name,effective_status,objective,daily_budget,lifetime_budget,budget_remaining',
+    effective_status: '["ACTIVE","PAUSED"]',
+    limit: '50',
+  }) as { data: Campaign[] }
+  return (data.data || []).filter(
+    (c) => c.effective_status === 'ACTIVE' || c.effective_status === 'PAUSED'
+  )
+}
+
+// Returns account-level spend overview (today + current month)
+export async function getAccountOverview(): Promise<AccountOverview> {
+  const act = getAdAccount()
+  const { since, until } = currentMonthRange()
+
+  const [today, month] = await Promise.all([
+    metaGet(`${act}/insights`, {
+      fields: 'spend',
+      date_preset: 'today',
+    }) as Promise<{ data: Array<{ spend: string }> }>,
+    metaGet(`${act}/insights`, {
+      fields: 'spend,impressions,reach,clicks,ctr',
+      time_range: JSON.stringify({ since, until }),
+    }) as Promise<{ data: Array<{ spend: string; impressions: string; reach: string; clicks: string; ctr: string }> }>,
+  ])
+
+  const t = (today as { data: Array<{ spend: string }> }).data?.[0] || {}
+  const w = (month as { data: Array<{ spend: string; impressions: string; reach: string; clicks: string; ctr: string }> }).data?.[0] || {}
+
+  return {
+    spend_today: t.spend || '0',
+    spend_7d: w.spend || '0',
+    impressions_7d: w.impressions || '0',
+    reach_7d: w.reach || '0',
+    clicks_7d: w.clicks || '0',
+    ctr_7d: w.ctr || '0',
+  }
+}
+
+// Returns deep insights for a specific campaign (current month)
 export async function getCampaignInsights(campaignId: string): Promise<CampaignInsights | null> {
-  const today = new Date().toISOString().split('T')[0]
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+  const { since, until } = currentMonthRange()
+  const data = await metaGet(`${campaignId}/insights`, {
+    fields: 'campaign_id,campaign_name,spend,impressions,reach,clicks,cpc,cpm,ctr,frequency,actions',
+    time_range: JSON.stringify({ since, until }),
+  }) as { data: CampaignInsights[] }
 
-  try {
-    const data = await metaGet(`${campaignId}/insights`, {
-      fields: 'spend,reach,impressions,clicks,ctr,cpc,cpm,frequency,actions',
-      time_range: JSON.stringify({ since: sevenDaysAgo, until: today }),
-    }) as { data: CampaignInsights[] }
-    return data.data?.[0] || null
-  } catch {
-    return null
+  return data.data?.[0] || null
+}
+
+// Returns top performing ads for a campaign
+export async function getTopAds(campaignId: string): Promise<Array<{ name: string; spend: string; ctr: string; cpc: string }>> {
+  const data = await metaGet(`${campaignId}/insights`, {
+    fields: 'ad_name,spend,ctr,cpc,impressions',
+    level: 'ad',
+    date_preset: 'last_7d',
+    limit: '5',
+  }) as { data: Array<{ ad_name: string; spend: string; ctr: string; cpc: string }> }
+  return (data.data || [])
+    .sort((a, b) => parseFloat(b.spend || '0') - parseFloat(a.spend || '0'))
+    .slice(0, 3)
+    .map((r) => ({ name: r.ad_name || '?', spend: r.spend || '0', ctr: r.ctr || '0', cpc: r.cpc || '0' }))
+}
+
+// Helper: format budget in cents to dollar string
+export function formatBudget(cents?: string): string {
+  if (!cents) return '—'
+  const n = parseInt(cents)
+  if (isNaN(n)) return '—'
+  return `$${(n / 100).toFixed(2)}`
+}
+
+// Helper: get action count by type
+export function getActionValue(
+  actions: Array<{ action_type: string; value: string }> | undefined,
+  type: string
+): string {
+  const match = actions?.find((a) => a.action_type === type)
+  return match?.value || '0'
+}
+
+// Condensed per-campaign data for the multi-account brief report
+export type CampaignBrief = {
+  campaign_name: string
+  spend: string
+  impressions: string
+  reach: string
+  clicks: string
+  ctr: string
+  messages: string
+}
+
+// Returns campaigns with spend > 0 for an account, for the current month range
+export async function getAccountCampaignsBrief(accountId: string): Promise<CampaignBrief[]> {
+  const { since, until } = currentMonthRange()
+  const data = await metaGet(`${accountId}/insights`, {
+    fields: 'campaign_name,spend,impressions,reach,clicks,ctr,actions',
+    level: 'campaign',
+    time_range: JSON.stringify({ since, until }),
+    limit: '30',
+  }) as {
+    data: Array<{
+      campaign_name: string
+      spend: string
+      impressions: string
+      reach: string
+      clicks: string
+      ctr: string
+      actions?: Array<{ action_type: string; value: string }>
+    }>
   }
+
+  return (data.data || [])
+    .filter((r) => parseFloat(r.spend || '0') > 0)
+    .sort((a, b) => parseFloat(b.spend || '0') - parseFloat(a.spend || '0'))
+    .map((r) => ({
+      campaign_name: r.campaign_name,
+      spend: r.spend || '0',
+      impressions: r.impressions || '0',
+      reach: r.reach || '0',
+      clicks: r.clicks || '0',
+      ctr: r.ctr || '0',
+      messages: getActionValue(
+        r.actions,
+        'onsite_conversion.messaging_conversation_started_7d'
+      ),
+    }))
 }
 
-export async function getTopAds(campaignId: string): Promise<Array<{ name: string; ctr: string }>> {
-  const today = new Date().toISOString().split('T')[0]
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-
-  try {
-    const data = await metaGet(`${campaignId}/ads`, {
-      fields: 'name,insights{ctr,spend}',
-      time_range: JSON.stringify({ since: sevenDaysAgo, until: today }),
-      limit: '5',
-    }) as { data: Array<{ name: string; insights?: { data: Array<{ ctr: string }> } }> }
-
-    return (data.data || [])
-      .filter((ad) => ad.insights?.data?.[0]?.ctr)
-      .map((ad) => ({ name: ad.name, ctr: ad.insights!.data[0].ctr }))
-      .sort((a, b) => parseFloat(b.ctr) - parseFloat(a.ctr))
-      .slice(0, 3)
-  } catch {
-    return []
-  }
-}
-
-export function formatBudget(campaign: Campaign): string {
-  if (campaign.daily_budget) return `$${(parseInt(campaign.daily_budget) / 100).toFixed(2)}/día`
-  if (campaign.lifetime_budget) return `$${(parseInt(campaign.lifetime_budget) / 100).toFixed(2)} total`
-  return '—'
-}
-
-export function getActionValue(actions: CampaignInsights['actions'], type: string): string {
-  return actions?.find((a) => a.action_type === type)?.value || '0'
-}
-
-export function objectiveLabel(objective: string): string {
+export function objectiveLabel(obj: string): string {
   const map: Record<string, string> = {
     OUTCOME_LEADS: 'Leads',
     OUTCOME_TRAFFIC: 'Tráfico',
-    OUTCOME_AWARENESS: 'Reconocimiento',
     OUTCOME_ENGAGEMENT: 'Interacción',
+    OUTCOME_AWARENESS: 'Alcance',
     OUTCOME_SALES: 'Ventas',
     OUTCOME_APP_PROMOTION: 'App',
-    LINK_CLICKS: 'Clics',
+    LEAD_GENERATION: 'Leads',
+    LINK_CLICKS: 'Tráfico',
+    POST_ENGAGEMENT: 'Interacción',
     MESSAGES: 'Mensajes',
     CONVERSIONS: 'Conversiones',
-    LEAD_GENERATION: 'Generación de leads',
-    BRAND_AWARENESS: 'Reconocimiento de marca',
-    REACH: 'Alcance',
   }
-  return map[objective] || objective
+  return map[obj] || obj
 }
