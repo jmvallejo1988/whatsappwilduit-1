@@ -18,7 +18,7 @@ export default redis
 
 // ── Compatibility exports (legacy route files import from here) ───────────────
 
-interface ConversationRecord {
+interface ConversationRecord extends Record<string, unknown> {
   phone: string
   name: string
   lastMessage: string
