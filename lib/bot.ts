@@ -16,6 +16,11 @@ export async function setBotConfig(config: Partial<BotConfig>): Promise<void> {
   await redis.set(CONFIG_KEY, { ...current, ...config })
 }
 
+// Alias for backward compatibility
+export async function saveBotConfig(config: Partial<BotConfig>): Promise<void> {
+  await setBotConfig(config)
+}
+
 export async function isBotActive(phone: string): Promise<{ active: boolean; reason: string; count: number }> {
   const config = await getBotConfig()
   if (!config.active) return { active: false, reason: 'bot desactivado globalmente', count: 0 }
@@ -50,9 +55,13 @@ export async function setHumanMode(phone: string, active: boolean): Promise<void
   }
 }
 
-// Alias for backward compatibility
+// Aliases for backward compatibility
 export async function activateHumanMode(phone: string): Promise<void> {
   await setHumanMode(phone, true)
+}
+
+export async function deactivateHumanMode(phone: string): Promise<void> {
+  await setHumanMode(phone, false)
 }
 
 export async function getConversationMode(phone: string): Promise<boolean> {
