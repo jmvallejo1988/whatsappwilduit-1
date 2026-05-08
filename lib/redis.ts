@@ -1,17 +1,17 @@
 import { Redis } from '@upstash/redis'
 import { kv } from '@vercel/kv'
 
-const url =
-  process.env.KV_REST_API_URL ||
-  process.env.UPSTASH_REDIS_REST_URL ||
-  ''
-const token =
-  process.env.KV_REST_API_TOKEN ||
-  process.env.UPSTASH_REDIS_REST_TOKEN ||
-  ''
+const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || ''
+const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || ''
 
 const redis = new Redis({ url, token })
 export default redis
+
+interface Message {
+  role: string
+  content: string
+  ts: number
+}
 
 interface ConversationRecord extends Record<string, unknown> {
   phone: string
@@ -51,5 +51,27 @@ export async function saveConversationMeta(
     ])
   } catch (e) {
     console.error('saveConversationMeta error:', e)
+  }
+}
+
+export async function getMessages(phone: string): Promise<Message[]> {
+  try {
+    const raw = await redis.lrange(`messages:${phone}`, 0, 99)
+    return (raw as string[])
+      .map((r) => { try { return JSON.parse(r) } catch { return null } })
+      .filter(Boolean)
+      .reverse() as Message[]
+  } catch {
+    return []
+  }
+}
+
+export async function saveOutboundMessage(phone: string, text: string): Promise<void> {
+  try {
+    const msg = JSON.stringify({ role: 'assistant', content: text, ts: Date.now() })
+    await redis.lpush(`messages:${phone}`, msg)
+    await saveConversationMeta(phone, phone, text)
+  } catch (e) {
+    console.error('saveOutboundMessage error:', e)
   }
 }
