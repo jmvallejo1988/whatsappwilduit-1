@@ -66,11 +66,15 @@ export async function getMessages(phone: string): Promise<Message[]> {
   }
 }
 
-export async function saveOutboundMessage(phone: string, text: string): Promise<void> {
+export async function saveOutboundMessage(
+  phone: string,
+  name: string,
+  text: string
+): Promise<void> {
   try {
     const msg = JSON.stringify({ role: 'assistant', content: text, ts: Date.now() })
     await redis.lpush(`messages:${phone}`, msg)
-    await saveConversationMeta(phone, phone, text)
+    await saveConversationMeta(phone, name || phone, text)
   } catch (e) {
     console.error('saveOutboundMessage error:', e)
   }
