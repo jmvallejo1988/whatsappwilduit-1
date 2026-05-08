@@ -51,7 +51,6 @@ export async function POST(req: NextRequest) {
     statuses?: unknown[]
   }
 
-  // Ignore status updates
   if (!value?.messages?.length) {
     return NextResponse.json({ status: 'ok' })
   }
@@ -71,14 +70,13 @@ export async function POST(req: NextRequest) {
   ).split(',').map((p) => p.trim())
 
   const isAllowedForMetrics = METRICS_ALLOWED.includes(phone)
-
   const triggerMetrics = isAllowedForMetrics && isMetricsTrigger(text)
   const activeSession = isAllowedForMetrics && (await hasActiveMetricsSession(phone))
 
   if (triggerMetrics || activeSession) {
     console.log(`METRICS_FLOW phone=${phone} trigger=${triggerMetrics} session=${activeSession}`)
     try {
-      const reply = await handleMetricsMessage(phone, text)
+      const reply = await handleMetricsMessage(phone, text, contactName)
       if (reply) {
         await sendTextMessage(phone, reply)
         console.log(`METRICS_SENT phone=${phone}`)
@@ -99,7 +97,6 @@ export async function POST(req: NextRequest) {
 
   console.log(`BOT_CHECK phone=${phone} active=${active} reason="${reason}" count=${count}`)
 
-  // Save incoming message and update conversations list
   await saveMessage(phone, 'user', text)
   await saveConversationMeta(phone, contactName, text)
 
@@ -111,7 +108,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ status: 'ok' })
   }
 
-  // Generate bot response
   console.log(`BOT_GENERATING phone=${phone}`)
   try {
     const history = await getMessages(phone)
