@@ -14,6 +14,7 @@ import {
   hasActiveMetricsSession,
   handleMetricsMessage,
 } from '@/lib/metrics-handler'
+import { saveConversationMeta } from '@/lib/redis'
 
 // ── GET: Webhook verification ─────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
@@ -46,6 +47,7 @@ export async function POST(req: NextRequest) {
       text?: { body: string }
       id: string
     }>
+    contacts?: Array<{ profile: { name: string }; wa_id: string }>
     statuses?: unknown[]
   }
 
@@ -59,27 +61,28 @@ export async function POST(req: NextRequest) {
 
   const phone = msg.from
   const text = msg.text?.body?.trim() || ''
+  const contactName = value.contacts?.[0]?.profile?.name || phone
 
   console.log(`WEBHOOK_MSG phone=${phone} text="${text.slice(0, 80)}"`)
 
   // ── METRICS INTERCEPTOR ───────────────────────────────────────────────────
-  // Only allowed phones can access metrics (whitelist from env or hardcoded fallback)
   const METRICS_ALLOWED = (
     process.env.METRICS_ALLOWED_PHONES || '593963018853,593989131972'
   ).split(',').map((p) => p.trim())
 
   const isAllowedForMetrics = METRICS_ALLOWED.includes(phone)
 
-  // Check if this is a metrics trigger OR there's an active metrics session
   const triggerMetrics = isAllowedForMetrics && isMetricsTrigger(text)
   const activeSession = isAllowedForMetrics && (await hasActiveMetricsSession(phone))
 
   if (triggerMetrics || activeSession) {
     console.log(`METRICS_FLOW phone=${phone} trigger=${triggerMetrics} session=${activeSession}`)
     try {
-      const reply = await handleMetricsMessage(phone, text, triggerMetrics && !activeSession)
-      await sendTextMessage(phone, reply)
-      console.log(`METRICS_SENT phone=${phone}`)
+      const reply = await handleMetricsMessage(phone, text)
+      if (reply) {
+        await sendTextMessage(phone, reply)
+        console.log(`METRICS_SENT phone=${phone}`)
+      }
     } catch (err) {
       console.error(`METRICS_ERROR phone=${phone}`, err)
       await sendTextMessage(
@@ -96,19 +99,15 @@ export async function POST(req: NextRequest) {
 
   console.log(`BOT_CHECK phone=${phone} active=${active} reason="${reason}" count=${count}`)
 
-  // Save incoming message to history
+  // Save incoming message and update conversations list
   await saveMessage(phone, 'user', text)
+  await saveConversationMeta(phone, contactName, text)
 
   if (!active) {
     console.log(`BOT_SKIP phone=${phone} reason="${reason}"`)
-
-    // Send handoff message only when limit is exactly reached
     if (reason.includes('límite')) {
       await sendTextMessage(phone, config.handoffMessage).catch(() => {})
-      await setHumanMode(phone, true)
-      console.log(`BOT_HANDOFF phone=${phone}`)
     }
-
     return NextResponse.json({ status: 'ok' })
   }
 
@@ -127,7 +126,6 @@ export async function POST(req: NextRequest) {
     await sendTextMessage(phone, reply)
     console.log(`BOT_SENT phone=${phone}`)
 
-    // Check if we just hit the limit
     const newCount = count + 1
     if (newCount >= config.maxMessages) {
       await sendTextMessage(phone, config.handoffMessage).catch(() => {})
