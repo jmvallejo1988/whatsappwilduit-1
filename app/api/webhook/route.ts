@@ -73,10 +73,12 @@ export async function POST(req: NextRequest) {
   const triggerMetrics = isAllowedForMetrics && isMetricsTrigger(text)
   const activeSession = isAllowedForMetrics && (await hasActiveMetricsSession(phone))
 
+  await saveConversationMeta(phone, contactName, text)
+
   if (triggerMetrics || activeSession) {
     console.log(`METRICS_FLOW phone=${phone} trigger=${triggerMetrics} session=${activeSession}`)
     try {
-      const reply = await handleMetricsMessage(phone, text, contactName)
+      const reply = await handleMetricsMessage(phone, text, triggerMetrics)
       if (reply) {
         await sendTextMessage(phone, reply)
         console.log(`METRICS_SENT phone=${phone}`)
