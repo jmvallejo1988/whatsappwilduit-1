@@ -6,16 +6,16 @@ import {
   setHumanMode,
   saveMessage,
   getMessages,
-  getConversations,
 } from '@/lib/bot'
 import { callOpenRouter } from '@/lib/openrouter'
 import { sendTextMessage } from '@/lib/whatsapp'
 import {
   isMetricsTrigger,
+  isPagesTrigger,
   hasActiveMetricsSession,
   handleMetricsMessage,
+  handlePagesMessage,
 } from '@/lib/metrics-handler'
-import { saveConversationMeta } from '@/lib/redis'
 
 // ── GET: Webhook verification ─────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
@@ -28,52 +28,6 @@ export async function GET(req: NextRequest) {
     return new NextResponse(challenge, { status: 200 })
   }
   return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-}
-
-// ── ReporteWilduit ────────────────────────────────────────────────────────────
-async function handleReporteWilduit(phone: string): Promise<void> {
-  try {
-    const phones = await getConversations()
-    const total = phones.length
-
-    let totalMessages = 0
-    let botHandoffs = 0
-    const conversations: Array<{ phone: string; msgs: number; lastTs: number }> = []
-
-    for (const p of phones.slice(0, 20)) {
-      const msgs = await getMessages(p)
-      totalMessages += msgs.length
-      const hasAssistant = msgs.some((m) => m.role === 'assistant')
-      if (hasAssistant) botHandoffs++
-      const lastTs = msgs.length > 0 ? Math.max(...msgs.map((m) => m.ts)) : 0
-      conversations.push({ phone: p, msgs: msgs.length, lastTs })
-    }
-
-    conversations.sort((a, b) => b.lastTs - a.lastTs)
-
-    const now = new Date().toLocaleString('es-EC', { timeZone: 'America/Guayaquil' })
-    const topConvs = conversations
-      .slice(0, 5)
-      .map((c, i) => `${i + 1}. +${c.phone} — ${c.msgs} msgs`)
-      .join('\n')
-
-    const report = [
-      `📊 *REPORTE WILDUIT*`,
-      `🕐 ${now}`,
-      ``,
-      `👥 Conversaciones totales: ${total}`,
-      `💬 Mensajes totales: ${totalMessages}`,
-      `🤖 Convs con respuesta bot: ${botHandoffs}`,
-      ``,
-      `🔝 *Top 5 recientes:*`,
-      topConvs || 'Sin datos',
-    ].join('\n')
-
-    await sendTextMessage(phone, report)
-  } catch (err) {
-    console.error('REPORTE_ERROR', err)
-    await sendTextMessage(phone, '⚠️ Error al generar el reporte. Revisa los logs.').catch(() => {})
-  }
 }
 
 // ── POST: Incoming messages ───────────────────────────────────────────────────
@@ -94,10 +48,10 @@ export async function POST(req: NextRequest) {
       text?: { body: string }
       id: string
     }>
-    contacts?: Array<{ profile: { name: string }; wa_id: string }>
     statuses?: unknown[]
   }
 
+  // Ignore status updates
   if (!value?.messages?.length) {
     return NextResponse.json({ status: 'ok' })
   }
@@ -107,36 +61,44 @@ export async function POST(req: NextRequest) {
 
   const phone = msg.from
   const text = msg.text?.body?.trim() || ''
-  const contactName = value.contacts?.[0]?.profile?.name || phone
 
   console.log(`WEBHOOK_MSG phone=${phone} text="${text.slice(0, 80)}"`)
 
-  // ── REPORTEWILDUIT COMMAND ────────────────────────────────────────────────
-  if (text.toLowerCase() === 'reportewilduit') {
-    console.log(`REPORTE_WILDUIT phone=${phone}`)
-    await handleReporteWilduit(phone)
-    return NextResponse.json({ status: 'ok' })
-  }
-
   // ── METRICS INTERCEPTOR ───────────────────────────────────────────────────
+  // Only allowed phones can access metrics (whitelist from env or hardcoded fallback)
   const METRICS_ALLOWED = (
     process.env.METRICS_ALLOWED_PHONES || '593963018853,593989131972'
   ).split(',').map((p) => p.trim())
 
   const isAllowedForMetrics = METRICS_ALLOWED.includes(phone)
+
+  // MetricasWilduit — organic page insights (one-shot, no session)
+  if (isAllowedForMetrics && isPagesTrigger(text)) {
+    console.log(`PAGES_FLOW phone=${phone}`)
+    try {
+      const reply = await handlePagesMessage(phone)
+      await sendTextMessage(phone, reply)
+      console.log(`PAGES_SENT phone=${phone}`)
+    } catch (err) {
+      console.error(`PAGES_ERROR phone=${phone}`, err)
+      await sendTextMessage(
+        phone,
+        '⚠️ Error al obtener métricas de páginas. Intenta de nuevo en unos segundos.'
+      ).catch(() => {})
+    }
+    return NextResponse.json({ status: 'ok' })
+  }
+
+  // ReporteWilduit — Meta Ads campaign report (with optional session deep-dive)
   const triggerMetrics = isAllowedForMetrics && isMetricsTrigger(text)
   const activeSession = isAllowedForMetrics && (await hasActiveMetricsSession(phone))
-
-  await saveConversationMeta(phone, contactName, text)
 
   if (triggerMetrics || activeSession) {
     console.log(`METRICS_FLOW phone=${phone} trigger=${triggerMetrics} session=${activeSession}`)
     try {
-      const reply = await handleMetricsMessage(phone, text, triggerMetrics)
-      if (reply) {
-        await sendTextMessage(phone, reply)
-        console.log(`METRICS_SENT phone=${phone}`)
-      }
+      const reply = await handleMetricsMessage(phone, text, triggerMetrics && !activeSession)
+      await sendTextMessage(phone, reply)
+      console.log(`METRICS_SENT phone=${phone}`)
     } catch (err) {
       console.error(`METRICS_ERROR phone=${phone}`, err)
       await sendTextMessage(
@@ -153,17 +115,23 @@ export async function POST(req: NextRequest) {
 
   console.log(`BOT_CHECK phone=${phone} active=${active} reason="${reason}" count=${count}`)
 
+  // Save incoming message to history
   await saveMessage(phone, 'user', text)
-  await saveConversationMeta(phone, contactName, text)
 
   if (!active) {
     console.log(`BOT_SKIP phone=${phone} reason="${reason}"`)
+
+    // Send handoff message only when limit is exactly reached
     if (reason.includes('límite')) {
       await sendTextMessage(phone, config.handoffMessage).catch(() => {})
+      await setHumanMode(phone, true)
+      console.log(`BOT_HANDOFF phone=${phone}`)
     }
+
     return NextResponse.json({ status: 'ok' })
   }
 
+  // Generate bot response
   console.log(`BOT_GENERATING phone=${phone}`)
   try {
     const history = await getMessages(phone)
@@ -178,6 +146,7 @@ export async function POST(req: NextRequest) {
     await sendTextMessage(phone, reply)
     console.log(`BOT_SENT phone=${phone}`)
 
+    // Check if we just hit the limit
     const newCount = count + 1
     if (newCount >= config.maxMessages) {
       await sendTextMessage(phone, config.handoffMessage).catch(() => {})
