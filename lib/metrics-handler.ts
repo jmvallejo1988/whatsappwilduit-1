@@ -1,8 +1,12 @@
 /**
  * Metrics Handler — Wilduit
  *
- * "ReporteWilduit" → one-shot condensed report for all managed ad accounts.
- * Date range: 1st of current month to today.
+ * State machine for the "Métricas con Wilduit" protocol via WhatsApp.
+ *
+ * Phases:
+ *  0 — no active session (trigger: keyword)
+ *  1 — campaign list sent, waiting for selection (1-N) or "todas"
+ *  2 — deep dive shown, waiting for "diagnóstico", another number, or "salir"
  */
 
 import redis from './redis'
@@ -13,6 +17,7 @@ import {
   getCampaignInsights,
   getTopAds,
   getAccountCampaignsBrief,
+  getAllPagesInsights,
   currentMonthRange,
   formatBudget,
   getActionValue,
@@ -22,7 +27,7 @@ import {
 } from './meta-api'
 import { callOpenRouterLong } from './openrouter'
 
-// Keywords that trigger the metrics flow
+// Keywords that trigger the Meta Ads campaign report
 export const METRICS_TRIGGERS = [
   'reportewilduit',
   'reporte wilduit',
@@ -30,10 +35,18 @@ export const METRICS_TRIGGERS = [
   'rw',
 ]
 
-const CMD_EXIT       = ['salir', 'exit', 'cerrar', 'fin', 'stop']
-const CMD_DIAGNOSIS  = ['diagnóstico', 'diagnostico', 'analiza', 'análisis', 'analisis', 'diagnostica']
-const CMD_ALL        = ['todas', 'all', 'global']
-const SESSION_TTL    = 60 * 60 * 2 // 2 hours
+// Keywords that trigger the organic page insights report
+export const PAGES_TRIGGERS = [
+  'metricaswilduit',
+  'metricas wilduit',
+  'mwilduit',
+]
+
+// Commands within a session
+const CMD_EXIT = ['salir', 'exit', 'cerrar', 'fin', 'stop']
+const CMD_DIAGNOSIS = ['diagnóstico', 'diagnostico', 'analiza', 'análisis', 'analisis', 'diagnostica']
+const CMD_ALL = ['todas', 'all', 'global']
+const SESSION_TTL = 60 * 60 * 2 // 2 hours
 
 type MetricsSession = {
   phase: 1 | 2
@@ -47,6 +60,7 @@ async function getSession(phone: string): Promise<MetricsSession | null> {
   const key = `metrics:session:${phone}`
   const data = await redis.get<MetricsSession>(key)
   if (!data) return null
+  // Expire stale sessions
   if (Date.now() - data.ts > SESSION_TTL * 1000) {
     await redis.del(key)
     return null
@@ -67,6 +81,11 @@ export function isMetricsTrigger(text: string): boolean {
   return METRICS_TRIGGERS.some((t) => lower === t || lower.startsWith(t))
 }
 
+export function isPagesTrigger(text: string): boolean {
+  const lower = text.toLowerCase().trim()
+  return PAGES_TRIGGERS.some((t) => lower === t || lower.startsWith(t))
+}
+
 export async function hasActiveMetricsSession(phone: string): Promise<boolean> {
   const s = await getSession(phone)
   return s !== null
@@ -74,17 +93,19 @@ export async function hasActiveMetricsSession(phone: string): Promise<boolean> {
 
 // ── Multi-account condensed report ────────────────────────────────────────────
 
+/** Remove MOFU/TOFU tags, date ranges and budget noise from campaign names */
 function cleanName(raw: string): string {
   let n = raw
-    .replace(/^[-\s\[\]]+/, '')
-    .replace(/\[?\s*(TOFU|MOFU|BOFU)\s*\]?\s*/gi, '$1 ')
-    .replace(/\s*(DESDE\s+\d+|\$\d+|=\s*\$).*$/i, '')
-    .replace(/\s*\bHASTA\s+\d+\s+\w+\b.*/i, '')
+    .replace(/^[-\s\[\]]+/, '')                                      // leading dashes/brackets
+    .replace(/\[?\s*(TOFU|MOFU|BOFU)\s*\]?\s*/gi, '$1 ')           // normalize TOFU/MOFU
+    .replace(/\s*(DESDE\s+\d+|\$\d+|=\s*\$).*$/i, '')              // cut at DESDE N or $ amount
+    .replace(/\s*\bHASTA\s+\d+\s+\w+\b.*/i, '')                    // cut trailing HASTA date
     .replace(/\s{2,}/g, ' ')
     .trim()
-  return n.length > 32 ? n.slice(0, 30) + '\u2026' : n || raw.slice(0, 30)
+  return n.length > 32 ? n.slice(0, 30) + '…' : n || raw.slice(0, 30)
 }
 
+/** Single emoji rating based on CTR and messages */
 function ratingEmoji(ctr: number, msgs: number, isMessaging: boolean): string {
   if (isMessaging) {
     if (msgs >= 50) return '🔥'
@@ -98,6 +119,7 @@ function ratingEmoji(ctr: number, msgs: number, isMessaging: boolean): string {
   return '⚠️'
 }
 
+/** Short performance label */
 function perfLabel(ctr: number, msgs: number, isMessaging: boolean): string {
   if (isMessaging) {
     if (msgs >= 50) return 'Excelente'
@@ -111,16 +133,17 @@ function perfLabel(ctr: number, msgs: number, isMessaging: boolean): string {
   return 'CTR bajo — revisar creative'
 }
 
+/** Format a single campaign line for the brief report */
 function formatCampaignLine(c: CampaignBrief): string {
-  const msgs   = parseInt(c.messages || '0')
-  const isMsg  = msgs > 0
-  const ctr    = parseFloat(c.ctr || '0')
-  const reach  = parseInt(c.reach || '0').toLocaleString('es')
-  const imp    = parseInt(c.impressions || '0').toLocaleString('es')
-  const clicks = parseInt(c.clicks || '0').toLocaleString('es')
-  const rating = ratingEmoji(ctr, msgs, isMsg)
-  const perf   = perfLabel(ctr, msgs, isMsg)
-  const name   = cleanName(c.campaign_name)
+  const msgs     = parseInt(c.messages || '0')
+  const isMsg    = msgs > 0
+  const ctr      = parseFloat(c.ctr || '0')
+  const reach    = parseInt(c.reach || '0').toLocaleString('es')
+  const imp      = parseInt(c.impressions || '0').toLocaleString('es')
+  const clicks   = parseInt(c.clicks || '0').toLocaleString('es')
+  const rating   = ratingEmoji(ctr, msgs, isMsg)
+  const perf     = perfLabel(ctr, msgs, isMsg)
+  const name     = cleanName(c.campaign_name)
 
   let line = `• *${name}*\n`
   line    += `  👁 ${reach} alc · 📣 ${imp} imp · 🖱 ${clicks} clics`
@@ -129,11 +152,13 @@ function formatCampaignLine(c: CampaignBrief): string {
   return line
 }
 
+/** Generate the full multi-account condensed report */
 async function generateAllAccountsReport(): Promise<string> {
   const { since, until } = currentMonthRange()
+  const [sinceDay, sinceMonth] = since.split('-').slice(1)
+  const [,, untilDay] = until.split('-')
+
   const monthNames = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']
-  const [, sinceMonth, sinceDay] = since.split('-')
-  const untilDay = until.split('-')[2]
   const monthLabel = monthNames[parseInt(sinceMonth) - 1]
 
   const lines: string[] = [
@@ -150,7 +175,7 @@ async function generateAllAccountsReport(): Promise<string> {
   )
 
   for (let i = 0; i < AD_ACCOUNTS.length; i++) {
-    const acc    = AD_ACCOUNTS[i]
+    const acc = AD_ACCOUNTS[i]
     const result = results[i]
 
     if (result.status === 'rejected') {
@@ -168,8 +193,9 @@ async function generateAllAccountsReport(): Promise<string> {
     lines.push(`${acc.emoji} *${acc.name}*`)
     for (const c of campaigns) {
       lines.push(formatCampaignLine(c))
-      const msgs  = parseInt(c.messages || '0')
-      const ctr   = parseFloat(c.ctr || '0')
+      // flag warnings
+      const msgs = parseInt(c.messages || '0')
+      const ctr  = parseFloat(c.ctr || '0')
       const isMsg = msgs > 0
       if (ratingEmoji(ctr, msgs, isMsg) === '⚠️') {
         warnings.push(`${acc.name}: ${cleanName(c.campaign_name)}`)
@@ -185,15 +211,15 @@ async function generateAllAccountsReport(): Promise<string> {
   return lines.join('\n').trim()
 }
 
-// ── Phase 1 message (legacy deep-dive flow) ───────────────────────────────────
-
-function formatPhase1(campaigns: Campaign[], overview: { spend_today: string; spend_7d: string; reach_7d: string; impressions_7d: string; clicks_7d: string; ctr_7d: string }): string {
+// Format Phase 1 message
+function formatPhase1(campaigns: Campaign[], overview: ReturnType<typeof getAccountOverview> extends Promise<infer T> ? T : never): string {
   const lines: string[] = []
   lines.push('📊 *Reporte Wilduit* — Estado actual\n')
 
+  // Daily spend
   lines.push(`💰 Gasto hoy: *$${parseFloat(overview.spend_today).toFixed(2)} USD*`)
-  lines.push(`📈 Gasto este mes: *$${parseFloat(overview.spend_7d).toFixed(2)} USD*`)
-  lines.push(`👁 Alcance este mes: *${parseInt(overview.reach_7d).toLocaleString()}* personas\n`)
+  lines.push(`📈 Gasto últimos 7 días: *$${parseFloat(overview.spend_7d).toFixed(2)} USD*`)
+  lines.push(`👁 Alcance 7d: *${parseInt(overview.reach_7d).toLocaleString()}* personas\n`)
 
   if (campaigns.length === 0) {
     lines.push('⚠️ Sin campañas activas o pausadas en este momento.')
@@ -206,7 +232,7 @@ function formatPhase1(campaigns: Campaign[], overview: { spend_today: string; sp
   if (active.length > 0) {
     lines.push(`🟢 *Campañas ACTIVAS (${active.length}):*`)
     active.forEach((c, i) => {
-      const budget = c.daily_budget ? `${(parseInt(c.daily_budget) / 100).toFixed(2)}/día` : c.lifetime_budget ? `${(parseInt(c.lifetime_budget) / 100).toFixed(2)} total` : '—'
+      const budget = c.daily_budget ? `$${(parseInt(c.daily_budget) / 100).toFixed(2)}/día` : c.lifetime_budget ? `$${(parseInt(c.lifetime_budget) / 100).toFixed(2)} total` : '—'
       const obj = objectiveLabel(c.objective)
       lines.push(`  ${i + 1}️⃣ ${c.name}`)
       lines.push(`     💵 ${budget} | 🎯 ${obj}`)
@@ -216,26 +242,30 @@ function formatPhase1(campaigns: Campaign[], overview: { spend_today: string; sp
   if (paused.length > 0) {
     lines.push(`\n⏸ *Campañas PAUSADAS (${paused.length}):*`)
     paused.forEach((c, i) => {
-      lines.push(`  ${active.length + i + 1}️⃣ ${c.name} | 🎯 ${objectiveLabel(c.objective)}`)
+      const obj = objectiveLabel(c.objective)
+      lines.push(`  ${active.length + i + 1}️⃣ ${c.name} | 🎯 ${obj}`)
     })
   }
 
-  lines.push('\n¿Qué campaña querés auditar? Responde con el *número* o *salir* para cerrar.')
+  lines.push('\n¿Qué campaña querés auditar? Responde con el *número* o envía *todas* para el resumen global.')
+
   return lines.join('\n')
 }
 
+// Format Phase 2 deep dive message
 function formatDeepDive(campaign: Campaign, insights: Awaited<ReturnType<typeof getCampaignInsights>>, topAds: Awaited<ReturnType<typeof getTopAds>>): string {
   if (!insights) {
-    return `🔍 *${campaign.name}*\n\nSin datos disponibles para este mes.`
+    return `🔍 *${campaign.name}*\n\nSin datos disponibles para los últimos 7 días. La campaña puede estar recién creada o sin impresiones.`
   }
 
-  const leads      = getActionValue(insights.actions, 'lead')
-  const messages   = getActionValue(insights.actions, 'onsite_conversion.messaging_conversation_started_7d')
+  const leads = getActionValue(insights.actions, 'lead')
+  const messages = getActionValue(insights.actions, 'onsite_conversion.messaging_conversation_started_7d')
   const linkClicks = getActionValue(insights.actions, 'link_click')
 
   const lines: string[] = []
   lines.push(`🔍 *Deep Dive — ${campaign.name}*`)
-  lines.push(`📅 Mes actual\n`)
+  lines.push(`📅 Últimos 7 días\n`)
+
   lines.push(`👁 Alcance: *${parseInt(insights.reach).toLocaleString()} personas*`)
   lines.push(`📣 Impresiones: *${parseInt(insights.impressions).toLocaleString()}*`)
   lines.push(`🔁 Frecuencia: *${parseFloat(insights.frequency || '0').toFixed(2)}x*`)
@@ -245,10 +275,11 @@ function formatDeepDive(campaign: Campaign, insights: Awaited<ReturnType<typeof 
   lines.push(`📡 CPM: *$${parseFloat(insights.cpm || '0').toFixed(2)}*`)
   lines.push(`💰 Gasto total: *$${parseFloat(insights.spend || '0').toFixed(2)} USD*`)
 
-  if (leads !== '0' || messages !== '0' || linkClicks !== '0') {
+  const hasResults = leads !== '0' || messages !== '0' || linkClicks !== '0'
+  if (hasResults) {
     lines.push(`\n🎯 *Resultados:*`)
-    if (leads !== '0')      lines.push(`  • Leads: *${leads}*`)
-    if (messages !== '0')   lines.push(`  • Mensajes iniciados: *${messages}*`)
+    if (leads !== '0') lines.push(`  • Leads: *${leads}*`)
+    if (messages !== '0') lines.push(`  • Mensajes iniciados: *${messages}*`)
     if (linkClicks !== '0') lines.push(`  • Link clicks: *${linkClicks}*`)
   }
 
@@ -259,10 +290,12 @@ function formatDeepDive(campaign: Campaign, insights: Awaited<ReturnType<typeof 
     })
   }
 
-  lines.push('\nResponde *diagnóstico* para análisis IA, otro número para ver otra campaña, o *salir*.')
+  lines.push('\nResponde *diagnóstico* para análisis IA, otro número para ver otra campaña, o *salir* para cerrar.')
+
   return lines.join('\n')
 }
 
+// Generate AI diagnosis using OpenRouter
 async function generateDiagnosis(campaign: Campaign, insightsText: string): Promise<string> {
   const systemPrompt = `Eres un estratega de marketing digital experto en Meta Ads con la metodología Boost Digital de Wilduit Marketing.
 
@@ -292,12 +325,11 @@ Proporciona: (1) diagnóstico rápido, (2) 3-5 acciones concretas para optimizar
     const result = await callOpenRouterLong(userPrompt, systemPrompt)
     return `🧠 *Diagnóstico IA — ${campaign.name}*\n\n${result}\n\n_Responde con un número para ver otra campaña o *salir* para cerrar._`
   } catch {
-    return `⚠️ Error al generar diagnóstico IA. Intenta de nuevo con *diagnóstico*.`
+    return '⚠️ Error al generar diagnóstico IA. Intenta de nuevo con *diagnóstico*.'
   }
 }
 
-// ── Main handler ──────────────────────────────────────────────────────────────
-
+// Main handler — returns the WhatsApp message to send back
 export async function handleMetricsMessage(
   phone: string,
   text: string,
@@ -305,9 +337,10 @@ export async function handleMetricsMessage(
 ): Promise<string> {
   const lower = text.toLowerCase().trim()
 
+  // EXIT command — always available
   if (CMD_EXIT.some((c) => lower === c)) {
     await clearSession(phone)
-    return '✅ Sesión cerrada. Cuando quieras un nuevo reporte, escribe *ReporteWilduit*.'
+    return '✅ Sesión de métricas cerrada. Cuando quieras un nuevo reporte, escribe *ReporteWilduit*.'
   }
 
   const session = await getSession(phone)
@@ -316,7 +349,7 @@ export async function handleMetricsMessage(
   if (isNewTrigger || !session) {
     try {
       const report = await generateAllAccountsReport()
-      await clearSession(phone)
+      await clearSession(phone) // one-shot, no session needed
       return report
     } catch (err) {
       console.error('META_API_ERROR', err)
@@ -328,12 +361,13 @@ export async function handleMetricsMessage(
   if (session.phase === 1) {
     const { campaigns } = session
 
+    // "todas" — global account summary
     if (CMD_ALL.some((c) => lower === c)) {
       try {
         const overview = await getAccountOverview()
         await clearSession(phone)
         return (
-          `📊 *Resumen Global Wilduit* — Mes actual\n\n` +
+          `📊 *Resumen Global Wilduit* — Últimos 7 días\n\n` +
           `💰 Gasto total: *$${parseFloat(overview.spend_7d).toFixed(2)} USD*\n` +
           `👁 Alcance: *${parseInt(overview.reach_7d).toLocaleString()} personas*\n` +
           `📣 Impresiones: *${parseInt(overview.impressions_7d).toLocaleString()}*\n` +
@@ -346,6 +380,7 @@ export async function handleMetricsMessage(
       }
     }
 
+    // Parse number selection
     const num = parseInt(lower)
     if (!isNaN(num) && num >= 1 && num <= campaigns.length) {
       const selected = campaigns[num - 1]
@@ -355,11 +390,20 @@ export async function handleMetricsMessage(
           getTopAds(selected.id),
         ])
 
+        // Build a text snapshot for diagnosis later
         const snapshot = insights
           ? `Spend: $${insights.spend} | Reach: ${insights.reach} | Impressions: ${insights.impressions} | Clicks: ${insights.clicks} | CTR: ${insights.ctr}% | CPC: $${insights.cpc} | CPM: $${insights.cpm} | Frequency: ${insights.frequency} | Leads: ${getActionValue(insights.actions, 'lead')} | Messages: ${getActionValue(insights.actions, 'onsite_conversion.messaging_conversation_started_7d')}`
           : 'Sin datos'
 
-        await saveSession(phone, { phase: 2, campaigns, selectedCampaign: selected, insightsSnapshot: snapshot, ts: Date.now() })
+        const updatedSession: MetricsSession = {
+          phase: 2,
+          campaigns,
+          selectedCampaign: selected,
+          insightsSnapshot: snapshot,
+          ts: Date.now(),
+        }
+        await saveSession(phone, updatedSession)
+
         return formatDeepDive(selected, insights, topAds)
       } catch {
         return `⚠️ Error al obtener datos de "${selected.name}". Intenta de nuevo.`
@@ -369,15 +413,18 @@ export async function handleMetricsMessage(
     return `Responde con el número de la campaña (1-${campaigns.length}), *todas* para resumen global, o *salir* para cerrar.`
   }
 
-  // ── Phase 2: Deep dive ─────────────────────────────────────────────────────
+  // ── Phase 2: Deep dive shown, waiting for next action ─────────────────────
   if (session.phase === 2) {
     const { campaigns, selectedCampaign, insightsSnapshot } = session
 
+    // Diagnosis request
     if (CMD_DIAGNOSIS.some((c) => lower === c || lower.startsWith(c))) {
       if (!selectedCampaign) return '⚠️ Error de sesión. Escribe *ReporteWilduit* para reiniciar.'
-      return generateDiagnosis(selectedCampaign, insightsSnapshot || 'Sin datos')
+      const diagnosis = await generateDiagnosis(selectedCampaign, insightsSnapshot || 'Sin datos')
+      return diagnosis
     }
 
+    // Another campaign number
     const num = parseInt(lower)
     if (!isNaN(num) && num >= 1 && num <= campaigns.length) {
       const selected = campaigns[num - 1]
@@ -391,7 +438,15 @@ export async function handleMetricsMessage(
           ? `Spend: $${insights.spend} | Reach: ${insights.reach} | Impressions: ${insights.impressions} | Clicks: ${insights.clicks} | CTR: ${insights.ctr}% | CPC: $${insights.cpc} | CPM: $${insights.cpm} | Frequency: ${insights.frequency} | Leads: ${getActionValue(insights.actions, 'lead')} | Messages: ${getActionValue(insights.actions, 'onsite_conversion.messaging_conversation_started_7d')}`
           : 'Sin datos'
 
-        await saveSession(phone, { phase: 2, campaigns, selectedCampaign: selected, insightsSnapshot: snapshot, ts: Date.now() })
+        const updatedSession: MetricsSession = {
+          phase: 2,
+          campaigns,
+          selectedCampaign: selected,
+          insightsSnapshot: snapshot,
+          ts: Date.now(),
+        }
+        await saveSession(phone, updatedSession)
+
         return formatDeepDive(selected, insights, topAds)
       } catch {
         return `⚠️ Error al obtener datos de "${selected.name}". Intenta de nuevo.`
@@ -402,4 +457,56 @@ export async function handleMetricsMessage(
   }
 
   return '⚠️ Error de sesión. Escribe *ReporteWilduit* para reiniciar.'
+}
+
+// ── Page insights report (MetricasWilduit) ────────────────────────────────────
+
+async function generatePagesReport(): Promise<string> {
+  const pages = await getAllPagesInsights()
+
+  if (!pages.length) {
+    return '⚠️ No se encontraron páginas conectadas al Business Manager. Verifica la configuración en Meta Business Suite.'
+  }
+
+  const lines: string[] = ['📱 *MetricasWilduit* — últimos 7 días\n']
+
+  let hasInsights = false
+
+  for (const p of pages) {
+    const followers = p.page.fan_count?.toLocaleString('es') ?? '—'
+    lines.push(`📄 *${p.page.name}*`)
+    lines.push(`  👥 Seguidores: *${followers}*`)
+
+    if (p.error) {
+      lines.push(`  ⚠️ ${p.error}`)
+    } else {
+      hasInsights = true
+      const imp   = parseInt(p.impressions_week || '0').toLocaleString('es')
+      const eng   = parseInt(p.engaged_users_week || '0').toLocaleString('es')
+      const newF  = parseInt(p.new_followers_week || '0').toLocaleString('es')
+      const views = parseInt(p.page_views_week || '0').toLocaleString('es')
+      lines.push(`  👁 Alcance: *${imp}*`)
+      lines.push(`  💬 Interacciones: *${eng}*`)
+      lines.push(`  🆕 Nuevos seguidores: *${newF}*`)
+      lines.push(`  🔍 Visitas a página: *${views}*`)
+    }
+    lines.push('')
+  }
+
+  if (!hasInsights) {
+    lines.push('_Para ver alcance, interacciones y seguidores nuevos, el token de sistema necesita el permiso *read_insights*. Agrégalo en Meta Business Suite → Usuarios del sistema._')
+  }
+
+  return lines.join('\n').trim()
+}
+
+/** One-shot handler for MetricasWilduit — no session state needed */
+export async function handlePagesMessage(phone: string): Promise<string> {
+  try {
+    console.log(`PAGES_REPORT phone=${phone}`)
+    return await generatePagesReport()
+  } catch (err) {
+    console.error(`PAGES_ERROR phone=${phone}`, err)
+    return '⚠️ Error al obtener métricas de páginas. Verifica que el token tenga los permisos necesarios.'
+  }
 }
