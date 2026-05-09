@@ -57,13 +57,13 @@ export async function saveConversationMeta(
 export async function getMessages(phone: string): Promise<Message[]> {
   try {
     const raw = await redis.lrange(`messages:${phone}`, 0, 99)
-    return (raw as string[])
-      .map((r) => { try { return JSON.parse(r) } catch { return null } })
-      .filter(Boolean)
-      .reverse() as Message[]
-  } catch {
-    return []
-  }
+    return (raw as Array<unknown>).map((r) => {
+      // @upstash/redis auto-deserializes JSON — r may already be an object
+      if (typeof r === 'object' && r !== null) return r as Message
+      if (typeof r === 'string') { try { return JSON.parse(r) } catch { return null } }
+      return null
+    }).filter(Boolean).reverse() as Message[]
+  } catch (e) { console.error('getMessages error:', e); return [] }
 }
 
 export async function saveOutboundMessage(
