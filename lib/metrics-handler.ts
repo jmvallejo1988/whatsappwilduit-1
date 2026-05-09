@@ -155,7 +155,7 @@ function formatCampaignLine(c: CampaignBrief): string {
 /** Generate the full multi-account condensed report */
 async function generateAllAccountsReport(): Promise<string> {
   const { since, until } = currentMonthRange()
-  const [sinceDay, sinceMonth] = since.split('-').slice(1)
+  const [, sinceMonth, sinceDay] = since.split('-')
   const [,, untilDay] = until.split('-')
 
   const monthNames = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']
