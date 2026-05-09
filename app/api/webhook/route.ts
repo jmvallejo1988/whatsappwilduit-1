@@ -109,6 +109,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ status: 'ok' })
   }
 
+  // ── Ecuador auto-redirect ────────────────────────────────────────────────
+  const metricsPhones = (process.env.METRICS_ALLOWED || '').split(',').map(p => p.trim())
+  if (phone.startsWith('593') && !metricsPhones.includes(phone)) {
+    await sendTextMessage(
+      phone,
+      'Hola 👋 Para Ecuador te atendemos directamente en este número: wa.me/593989131972'
+    ).catch(() => {})
+    return NextResponse.json({ status: 'ok' })
+  }
+
   // ── SALES BOT FLOW ─────────────────────────────────────────────────────────
   const config = await getBotConfig()
   const { active, reason, count } = await isBotActive(phone)
