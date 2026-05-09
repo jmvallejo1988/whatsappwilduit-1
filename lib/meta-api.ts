@@ -222,3 +222,85 @@ export function objectiveLabel(obj: string): string {
   }
   return map[obj] || obj
 }
+
+
+// ── Page Insights for MetricasWilduit ─────────────────────────────────────────
+
+export type PageInsightsResult = {
+  page: { id: string; name: string; fan_count?: number }
+  impressions_week?: string
+  engaged_users_week?: string
+  new_followers_week?: string
+  page_views_week?: string
+  error?: string
+}
+
+// Returns insights for all Facebook Pages owned by the Business Manager
+export async function getAllPagesInsights(): Promise<PageInsightsResult[]> {
+  const businessId = process.env.META_BUSINESS_ID || '1792760321017187'
+
+  // Step 1: get all owned pages from BM
+  let pages: Array<{ id: string; name: string; fan_count?: number }> = []
+  try {
+    const pagesData = await metaGet(`${businessId}/owned_pages`, {
+      fields: 'id,name,fan_count',
+      limit: '25',
+    }) as { data: Array<{ id: string; name: string; fan_count?: number }> }
+    pages = pagesData.data || []
+  } catch {
+    // fallback: try client pages via /me/accounts
+    try {
+      const meData = await metaGet('me/accounts', {
+        fields: 'id,name,fan_count',
+        limit: '25',
+      }) as { data: Array<{ id: string; name: string; fan_count?: number }> }
+      pages = meData.data || []
+    } catch {
+      return []
+    }
+  }
+
+  if (!pages.length) return []
+
+  // Step 2: for each page, get weekly insights
+  const results = await Promise.allSettled(
+    pages.map(async (page): Promise<PageInsightsResult> => {
+      try {
+        const insights = await metaGet(`${page.id}/insights`, {
+          metric: 'page_impressions,page_engaged_users,page_fan_adds,page_views_total',
+          period: 'week',
+          limit: '10',
+        }) as { data: Array<{ name: string; values: Array<{ value: number }> }> }
+
+        const getLatest = (name: string): string => {
+          const entry = insights.data?.find((d) => d.name === name)
+          const val = entry?.values?.[entry.values.length - 1]?.value ?? 0
+          return String(val)
+        }
+
+        return {
+          page,
+          impressions_week: getLatest('page_impressions'),
+          engaged_users_week: getLatest('page_engaged_users'),
+          new_followers_week: getLatest('page_fan_adds'),
+          page_views_week: getLatest('page_views_total'),
+        }
+      } catch (err) {
+        return {
+          page,
+          error: err instanceof Error ? err.message.slice(0, 120) : 'Error desconocido',
+        }
+      }
+    })
+  )
+
+  return results.map((r, i) => {
+    if (r.status === 'rejected') {
+      return {
+        page: pages[i],
+        error: String(r.reason).slice(0, 120),
+      }
+    }
+    return r.value
+  })
+}
