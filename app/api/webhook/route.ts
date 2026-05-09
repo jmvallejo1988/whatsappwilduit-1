@@ -6,6 +6,7 @@ import {
   setHumanMode,
   saveMessage,
   getMessages,
+  getConversations,
 } from '@/lib/bot'
 import { callOpenRouter } from '@/lib/openrouter'
 import { sendTextMessage } from '@/lib/whatsapp'
@@ -27,6 +28,52 @@ export async function GET(req: NextRequest) {
     return new NextResponse(challenge, { status: 200 })
   }
   return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+}
+
+// ── ReporteWilduit ────────────────────────────────────────────────────────────
+async function handleReporteWilduit(phone: string): Promise<void> {
+  try {
+    const phones = await getConversations()
+    const total = phones.length
+
+    let totalMessages = 0
+    let botHandoffs = 0
+    const conversations: Array<{ phone: string; msgs: number; lastTs: number }> = []
+
+    for (const p of phones.slice(0, 20)) {
+      const msgs = await getMessages(p)
+      totalMessages += msgs.length
+      const hasAssistant = msgs.some((m) => m.role === 'assistant')
+      if (hasAssistant) botHandoffs++
+      const lastTs = msgs.length > 0 ? Math.max(...msgs.map((m) => m.ts)) : 0
+      conversations.push({ phone: p, msgs: msgs.length, lastTs })
+    }
+
+    conversations.sort((a, b) => b.lastTs - a.lastTs)
+
+    const now = new Date().toLocaleString('es-EC', { timeZone: 'America/Guayaquil' })
+    const topConvs = conversations
+      .slice(0, 5)
+      .map((c, i) => `${i + 1}. +${c.phone} — ${c.msgs} msgs`)
+      .join('\n')
+
+    const report = [
+      `📊 *REPORTE WILDUIT*`,
+      `🕐 ${now}`,
+      ``,
+      `👥 Conversaciones totales: ${total}`,
+      `💬 Mensajes totales: ${totalMessages}`,
+      `🤖 Convs con respuesta bot: ${botHandoffs}`,
+      ``,
+      `🔝 *Top 5 recientes:*`,
+      topConvs || 'Sin datos',
+    ].join('\n')
+
+    await sendTextMessage(phone, report)
+  } catch (err) {
+    console.error('REPORTE_ERROR', err)
+    await sendTextMessage(phone, '⚠️ Error al generar el reporte. Revisa los logs.').catch(() => {})
+  }
 }
 
 // ── POST: Incoming messages ───────────────────────────────────────────────────
@@ -63,6 +110,13 @@ export async function POST(req: NextRequest) {
   const contactName = value.contacts?.[0]?.profile?.name || phone
 
   console.log(`WEBHOOK_MSG phone=${phone} text="${text.slice(0, 80)}"`)
+
+  // ── REPORTEWILDUIT COMMAND ────────────────────────────────────────────────
+  if (text.toLowerCase() === 'reportewilduit') {
+    console.log(`REPORTE_WILDUIT phone=${phone}`)
+    await handleReporteWilduit(phone)
+    return NextResponse.json({ status: 'ok' })
+  }
 
   // ── METRICS INTERCEPTOR ───────────────────────────────────────────────────
   const METRICS_ALLOWED = (
