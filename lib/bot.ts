@@ -16,7 +16,6 @@ export async function setBotConfig(config: Partial<BotConfig>): Promise<void> {
   await redis.set(CONFIG_KEY, { ...current, ...config })
 }
 
-// Alias for backward compatibility
 export async function saveBotConfig(config: Partial<BotConfig>): Promise<void> {
   await setBotConfig(config)
 }
@@ -55,7 +54,6 @@ export async function setHumanMode(phone: string, active: boolean): Promise<void
   }
 }
 
-// Aliases for backward compatibility
 export async function activateHumanMode(phone: string): Promise<void> {
   await setHumanMode(phone, true)
 }
@@ -64,8 +62,9 @@ export async function deactivateHumanMode(phone: string): Promise<void> {
   await setHumanMode(phone, false)
 }
 
-export async function getConversationMode(phone: string): Promise<boolean> {
-  return (await redis.get<boolean>(`bot:human:${phone}`)) ?? false
+export async function getConversationMode(phone: string): Promise<"bot" | "human"> {
+  const humanMode = await redis.get<boolean>(`bot:human:${phone}`)
+  return humanMode ? "human" : "bot"
 }
 
 export async function resetPhone(phone: string): Promise<void> {
@@ -80,7 +79,6 @@ export async function saveMessage(phone: string, role: 'user' | 'assistant', con
   await redis.ltrim(key, 0, 49)
 }
 
-// Aliases for backward compatibility
 export async function saveInboundMessage(phone: string, content: string): Promise<void> {
   await saveMessage(phone, 'user', content)
 }
@@ -92,12 +90,26 @@ export async function saveOutboundMessage(phone: string, content: string): Promi
 export async function getMessages(phone: string): Promise<Array<{ role: string; content: string; ts: number }>> {
   const key = `messages:${phone}`
   const raw = await redis.lrange<string>(key, 0, -1)
-  return raw
+  return (raw as unknown[])
     .map((r) => {
-      try { return typeof r === 'string' ? JSON.parse(r) : r } catch { return null }
+      let obj: Record<string, unknown>
+      if (typeof r === 'string') {
+        try { obj = JSON.parse(r) } catch { return null }
+      } else if (r && typeof r === 'object') {
+        obj = r as Record<string, unknown>
+      } else { return null }
+
+      const role =
+        (obj.role as string) ||
+        (obj.direction === 'inbound' ? 'user' : obj.direction === 'outbound' ? 'assistant' : null)
+      const content = (obj.content as string) || (obj.text as string) || ''
+      const ts = (obj.ts as number) || (obj.timestamp as number) || 0
+
+      if (!role || !content) return null
+      return { role, content, ts }
     })
     .filter(Boolean)
-    .reverse()
+    .reverse() as Array<{ role: string; content: string; ts: number }>
 }
 
 export async function getConversations(): Promise<string[]> {
