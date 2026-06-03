@@ -2,6 +2,7 @@ import redis from './redis'
 import { DEFAULT_BOT_CONFIG, BotConfig } from './openrouter'
 
 const CONFIG_KEY = 'bot:config'
+const CONVERSATIONS_SET = 'conversations:phones'
 
 export async function getBotConfig(): Promise<BotConfig> {
   try {
@@ -77,6 +78,8 @@ export async function saveMessage(phone: string, role: 'user' | 'assistant', con
   const msg = { role, content, ts: Date.now() }
   await redis.lpush(key, JSON.stringify(msg))
   await redis.ltrim(key, 0, 49)
+  // Track phone in conversations set
+  await redis.sadd(CONVERSATIONS_SET, phone)
 }
 
 export async function saveInboundMessage(phone: string, content: string): Promise<void> {
@@ -112,11 +115,20 @@ export async function getMessages(phone: string): Promise<Array<{ role: string; 
     .reverse() as Array<{ role: string; content: string; ts: number }>
 }
 
-const CONVERSATIONS_SET = 'conversations:phones'
-
 export async function getConversations(): Promise<string[]> {
   try {
-    const members = await redis.smembers<string[]>(CONVERSATIONS_SET)
+    let members = await redis.smembers<string[]>(CONVERSATIONS_SET)
+    if (!members || members.length === 0) {
+      // Self-healing migration: seed set from existing keys (runs once)
+      try {
+        const keys = await redis.keys('messages:*')
+        if (keys && keys.length > 0) {
+          const phones = keys.map((k: string) => k.replace('messages:', ''))
+          await redis.sadd(CONVERSATIONS_SET, ...phones)
+          members = phones
+        }
+      } catch {}
+    }
     return members || []
   } catch {
     return []
