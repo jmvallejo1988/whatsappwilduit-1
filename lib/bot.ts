@@ -112,7 +112,13 @@ export async function getMessages(phone: string): Promise<Array<{ role: string; 
     .reverse() as Array<{ role: string; content: string; ts: number }>
 }
 
+const CONVERSATIONS_SET = 'conversations:phones'
+
 export async function getConversations(): Promise<string[]> {
-  const keys = await redis.keys('messages:*')
-  return keys.map((k: string) => k.replace('messages:', ''))
+  try {
+    const members = await redis.smembers<string[]>(CONVERSATIONS_SET)
+    return members || []
+  } catch {
+    return []
+  }
 }
