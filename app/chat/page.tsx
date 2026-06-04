@@ -47,16 +47,36 @@ export default function ChatListPage() {
   return (
     <div style={{ maxWidth: 640, margin: '0 auto', background: '#111b21', minHeight: '100vh' }}>
       {/* Header */}
-      <div style={{ background: '#202c33', padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #2a3942' }}>
+      <div style={{
+        background: '#202c33', padding: '16px 20px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        borderBottom: '1px solid #2a3942', position: 'sticky', top: 0, zIndex: 10,
+      }}>
         <h1 style={{ color: '#e9edef', fontSize: 20, fontWeight: 600, margin: 0 }}>Wilduit WA Manager</h1>
-        <span style={{ color: '#00a884', fontSize: 22 }}>💬</span>
+        <a
+          href="/config"
+          title="Configurar bot"
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: 38, height: 38, borderRadius: '50%',
+            background: '#2a3942', color: '#8696a0',
+            fontSize: 18, textDecoration: 'none',
+            transition: 'background 0.15s',
+          }}
+        >
+          ⚙️
+        </a>
       </div>
 
       {loading && (
-        <p style={{ color: '#8696a0', fontSize: 14, textAlign: 'center', marginTop: 60 }}>Cargando conversaciones...</p>
+        <p style={{ color: '#8696a0', fontSize: 14, textAlign: 'center', marginTop: 60 }}>
+          Cargando conversaciones...
+        </p>
       )}
       {!loading && convos.length === 0 && (
-        <p style={{ color: '#8696a0', fontSize: 14, textAlign: 'center', marginTop: 60 }}>Sin conversaciones aún.</p>
+        <p style={{ color: '#8696a0', fontSize: 14, textAlign: 'center', marginTop: 60 }}>
+          Sin conversaciones aún. Escribe al número de WhatsApp para iniciar.
+        </p>
       )}
 
       {convos.map((c) => {
@@ -70,21 +90,16 @@ export default function ChatListPage() {
             key={phone}
             href={`/chat/${phone}`}
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 14,
-              padding: '12px 20px',
-              textDecoration: 'none',
-              color: '#e9edef',
-              borderBottom: '1px solid #2a3942',
-              background: 'transparent',
+              display: 'flex', alignItems: 'center', gap: 14,
+              padding: '12px 20px', textDecoration: 'none',
+              color: '#e9edef', borderBottom: '1px solid #2a3942',
             }}
           >
             <div style={{
               width: 46, height: 46, borderRadius: '50%',
-              background: '#00a884',
+              background: '#00a884', color: '#fff',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontWeight: 700, fontSize: 16, flexShrink: 0, color: '#fff',
+              fontWeight: 700, fontSize: 16, flexShrink: 0,
             }}>
               {phone.slice(-2)}
             </div>
