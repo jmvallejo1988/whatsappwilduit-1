@@ -18,6 +18,10 @@ import {
 } from '@/lib/metrics-handler'
 import { getPendingConfirm, clearPendingConfirm, updateAppointment } from '@/lib/appointments'
 import { parseConfirmation } from '@/lib/templates'
+import { getAvailabilitySummary, isGCalConfigured } from '@/lib/gcal'
+
+// Keywords that suggest the prospect wants to schedule a meeting
+const SCHEDULING_KEYWORDS = /\b(agendar|agenda|cita|reunión|reunion|disponib|horario|cuando|cuándo|sesión|sesion|meet|llamada|video|zoom|calendario)\b/i
 
 // ── GET: Webhook verification ─────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
@@ -87,14 +91,12 @@ export async function POST(req: NextRequest) {
   }
 
   // ── METRICS INTERCEPTOR ───────────────────────────────────────────────────
-  // Only allowed phones can access metrics (whitelist from env or hardcoded fallback)
   const METRICS_ALLOWED = (
     process.env.METRICS_ALLOWED_PHONES || '593963018853,593989131972'
   ).split(',').map((p) => p.trim())
 
   const isAllowedForMetrics = METRICS_ALLOWED.includes(phone)
 
-  // MetricasWilduit — organic page insights (one-shot, no session)
   if (isAllowedForMetrics && isPagesTrigger(text)) {
     console.log(`PAGES_FLOW phone=${phone}`)
     try {
@@ -111,7 +113,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ status: 'ok' })
   }
 
-  // ReporteWilduit — Meta Ads campaign report (with optional session deep-dive)
   const triggerMetrics = isAllowedForMetrics && isMetricsTrigger(text)
   const activeSession = isAllowedForMetrics && (await hasActiveMetricsSession(phone))
 
@@ -143,7 +144,6 @@ export async function POST(req: NextRequest) {
   if (!active) {
     console.log(`BOT_SKIP phone=${phone} reason="${reason}"`)
 
-    // Send handoff message only when limit is exactly reached
     if (reason.includes('límite')) {
       await sendTextMessage(phone, config.handoffMessage).catch(() => {})
       await setHumanMode(phone, true)
@@ -162,7 +162,25 @@ export async function POST(req: NextRequest) {
       content: m.content,
     }))
 
-    const reply = await callOpenRouter(messages, config.systemPrompt)
+    // Build system prompt — inject real availability if message mentions scheduling
+    let systemPrompt = config.systemPrompt
+    const wantsToSchedule = SCHEDULING_KEYWORDS.test(text) ||
+      messages.slice(-4).some((m) => m.role === 'user' && SCHEDULING_KEYWORDS.test(m.content))
+
+    if (wantsToSchedule && isGCalConfigured()) {
+      const availability = await getAvailabilitySummary(6)
+      if (availability) {
+        systemPrompt = `${systemPrompt}
+
+DISPONIBILIDAD REAL EN AGENDA (próximos 5 días — usa estos horarios cuando el prospecto quiera agendar):
+${availability}
+
+Cuando el prospecto quiera agendar, sugiere 2-3 de estos horarios de forma natural. Si elige uno, dile que lo confirmaremos y que recibirá los detalles por WhatsApp. NO inventes horarios — usa solo los de arriba.`
+        console.log(`BOT_AVAILABILITY_INJECTED phone=${phone} wantsToSchedule=${wantsToSchedule}`)
+      }
+    }
+
+    const reply = await callOpenRouter(messages, systemPrompt)
     await saveMessage(phone, 'assistant', reply)
     await incrementBotCount(phone)
     await sendTextMessage(phone, reply)
