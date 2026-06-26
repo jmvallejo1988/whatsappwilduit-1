@@ -12,6 +12,7 @@ type BotConfig = {
   systemPrompt: string
   phoneNumberId?: string
 }
+type AppUser = { email: string; role: 'admin' | 'user'; createdAt: string }
 
 const LABEL_COLORS = ['#25D366', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#10b981']
 
@@ -25,15 +26,22 @@ export default function ConfiguracionesPage() {
   const [creatingLabel, setCreatingLabel] = useState(false)
   const [aiImproving, setAiImproving] = useState(false)
   const [aiInstructions, setAiInstructions] = useState('')
-  const [activeSection, setActiveSection] = useState<'bot' | 'etiquetas' | 'plantillas'>('bot')
+  const [activeSection, setActiveSection] = useState<'bot' | 'etiquetas' | 'plantillas' | 'usuarios'>('bot')
   const [templates, setTemplates] = useState<Templates | null>(null)
   const [savingTpl, setSavingTpl] = useState<TemplateType | null>(null)
   const [savedTpl, setSavedTpl] = useState<TemplateType | null>(null)
+  const [users, setUsers] = useState<AppUser[]>([])
+  const [newUserEmail, setNewUserEmail] = useState('')
+  const [newUserPassword, setNewUserPassword] = useState('')
+  const [newUserRole, setNewUserRole] = useState<'admin' | 'user'>('user')
+  const [creatingUser, setCreatingUser] = useState(false)
+  const [userError, setUserError] = useState('')
 
   useEffect(() => {
     fetch('/api/bot').then(r => r.json()).then(d => setConfig(d.config))
     fetch('/api/labels').then(r => r.json()).then(d => setLabels(d.labels || []))
     fetch('/api/templates').then(r => r.json()).then(d => setTemplates(d.templates || null))
+    fetch('/api/users').then(r => r.json()).then(d => setUsers(d.users || []))
   }, [])
 
   async function saveTemplate(type: TemplateType) {
@@ -121,6 +129,42 @@ export default function ConfiguracionesPage() {
     }
   }
 
+  async function createAppUser() {
+    if (!newUserEmail.trim() || !newUserPassword.trim()) return
+    setCreatingUser(true)
+    setUserError('')
+    try {
+      const res = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: newUserEmail.trim(), password: newUserPassword, role: newUserRole }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setUserError(data.error || 'Error al crear usuario')
+        return
+      }
+      setNewUserEmail('')
+      setNewUserPassword('')
+      setNewUserRole('user')
+      const updated = await fetch('/api/users').then(r => r.json())
+      setUsers(updated.users || [])
+    } finally {
+      setCreatingUser(false)
+    }
+  }
+
+  async function deleteAppUser(email: string) {
+    if (!confirm(`¿Eliminar acceso de ${email}?`)) return
+    await fetch('/api/users', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    })
+    const updated = await fetch('/api/users').then(r => r.json())
+    setUsers(updated.users || [])
+  }
+
   async function deleteLabel(id: string) {
     const res = await fetch('/api/labels', {
       method: 'POST',
@@ -198,8 +242,8 @@ export default function ConfiguracionesPage() {
       <div style={{ maxWidth: 700, margin: '0 auto', padding: '16px' }}>
 
         {/* Section tabs */}
-        <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-          {(['bot', 'etiquetas', 'plantillas'] as const).map(tab => (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+          {(['bot', 'etiquetas', 'plantillas', 'usuarios'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveSection(tab)}
@@ -210,7 +254,7 @@ export default function ConfiguracionesPage() {
                 border: activeSection === tab ? '1px solid #25D36644' : '1px solid #222',
               }}
             >
-              {tab === 'bot' ? '🤖 Bot IA' : tab === 'etiquetas' ? '🏷️ Etiquetas' : '✉️ Plantillas'}
+              {tab === 'bot' ? '🤖 Bot IA' : tab === 'etiquetas' ? '🏷️ Etiquetas' : tab === 'plantillas' ? '✉️ Plantillas' : '👥 Usuarios'}
             </button>
           ))}
         </div>
@@ -397,6 +441,111 @@ export default function ConfiguracionesPage() {
                     <button
                       onClick={() => deleteLabel(l.id)}
                       style={{ background: 'none', border: 'none', color: '#555', cursor: 'pointer', fontSize: 16, padding: '0 4px' }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* USUARIOS SECTION */}
+        {activeSection === 'usuarios' && (
+          <>
+            <div style={s.section}>
+              <h3 style={{ margin: '0 0 14px', fontSize: 14, color: '#fff', fontWeight: 600 }}>👥 Agregar acceso</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div>
+                  <label style={s.label}>Correo electrónico</label>
+                  <input
+                    style={s.input}
+                    type="email"
+                    value={newUserEmail}
+                    onChange={e => setNewUserEmail(e.target.value)}
+                    placeholder="usuario@email.com"
+                  />
+                </div>
+                <div>
+                  <label style={s.label}>Contraseña</label>
+                  <input
+                    style={s.input}
+                    type="text"
+                    value={newUserPassword}
+                    onChange={e => setNewUserPassword(e.target.value)}
+                    placeholder="Contraseña para este usuario"
+                  />
+                </div>
+                <div>
+                  <label style={s.label}>Rol</label>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    {(['user', 'admin'] as const).map(r => (
+                      <button
+                        key={r}
+                        onClick={() => setNewUserRole(r)}
+                        style={{
+                          ...s.btnSecondary,
+                          background: newUserRole === r ? '#0d2a1e' : '#1a1a1a',
+                          color: newUserRole === r ? '#25D366' : '#888',
+                          border: newUserRole === r ? '1px solid #25D36644' : '1px solid #222',
+                          fontSize: 13,
+                          padding: '7px 14px',
+                        }}
+                      >
+                        {r === 'user' ? '👤 Usuario' : '🔑 Admin'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {userError && (
+                  <p style={{ color: '#f87171', fontSize: 12, margin: 0 }}>{userError}</p>
+                )}
+                <div>
+                  <button
+                    onClick={createAppUser}
+                    disabled={creatingUser || !newUserEmail.trim() || !newUserPassword.trim()}
+                    style={{ ...s.btnPrimary, opacity: creatingUser || !newUserEmail.trim() || !newUserPassword.trim() ? 0.5 : 1 }}
+                  >
+                    {creatingUser ? 'Creando...' : '+ Agregar usuario'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div style={s.section}>
+              <h3 style={{ margin: '0 0 14px', fontSize: 14, color: '#fff', fontWeight: 600 }}>Usuarios con acceso</h3>
+              {users.length === 0 && (
+                <p style={{ color: '#555', fontSize: 13 }}>No hay usuarios registrados.</p>
+              )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {users.map(u => (
+                  <div key={u.email} style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    background: '#0a0a0a', borderRadius: 8,
+                    padding: '11px 14px', border: '1px solid #1e1e1e',
+                  }}>
+                    <div style={{
+                      width: 34, height: 34, borderRadius: '50%',
+                      background: u.role === 'admin' ? '#1e2a3a' : '#1a1a1a',
+                      color: u.role === 'admin' ? '#3b82f6' : '#888',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 16, flexShrink: 0,
+                    }}>
+                      {u.role === 'admin' ? '🔑' : '👤'}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, color: '#e0e0e0', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {u.email}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#555', marginTop: 2 }}>
+                        {u.role === 'admin' ? 'Administrador' : 'Usuario'} · desde {new Date(u.createdAt).toLocaleDateString('es-EC')}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => deleteAppUser(u.email)}
+                      style={{ background: 'none', border: 'none', color: '#444', cursor: 'pointer', fontSize: 18, padding: '0 4px', flexShrink: 0 }}
+                      title="Eliminar acceso"
                     >
                       ×
                     </button>
