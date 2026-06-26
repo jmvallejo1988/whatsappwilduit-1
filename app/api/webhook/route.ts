@@ -16,6 +16,8 @@ import {
   handleMetricsMessage,
   handlePagesMessage,
 } from '@/lib/metrics-handler'
+import { getPendingConfirm, clearPendingConfirm, updateAppointment } from '@/lib/appointments'
+import { parseConfirmation } from '@/lib/templates'
 
 // ── GET: Webhook verification ─────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
@@ -64,6 +66,26 @@ export async function POST(req: NextRequest) {
 
   console.log(`WEBHOOK_MSG phone=${phone} text="${text.slice(0, 80)}"`)
 
+  // ── APPOINTMENT CONFIRMATION PARSER ──────────────────────────────────────
+  const pendingApptId = await getPendingConfirm(phone)
+  if (pendingApptId) {
+    const answer = parseConfirmation(text)
+    if (answer === 'yes') {
+      await updateAppointment(pendingApptId, { status: 'confirmed' })
+      await clearPendingConfirm(phone)
+      await sendTextMessage(phone, '¡Perfecto! Tu cita está confirmada ✅ Te esperamos 🗓').catch(() => {})
+      console.log(`APPT_CONFIRMED appt=${pendingApptId} phone=${phone}`)
+      return NextResponse.json({ status: 'ok' })
+    } else if (answer === 'no') {
+      await updateAppointment(pendingApptId, { status: 'cancelled' })
+      await clearPendingConfirm(phone)
+      await sendTextMessage(phone, 'Entendido, hemos cancelado tu cita. Si quieres reagendar escríbenos cuando quieras 🙌').catch(() => {})
+      console.log(`APPT_CANCELLED appt=${pendingApptId} phone=${phone}`)
+      return NextResponse.json({ status: 'ok' })
+    }
+    // If answer is null (ambiguous), fall through to bot so it can handle naturally
+  }
+
   // ── METRICS INTERCEPTOR ───────────────────────────────────────────────────
   // Only allowed phones can access metrics (whitelist from env or hardcoded fallback)
   const METRICS_ALLOWED = (
@@ -106,16 +128,6 @@ export async function POST(req: NextRequest) {
         '⚠️ Error al procesar las métricas. Intenta de nuevo en unos segundos.'
       ).catch(() => {})
     }
-    return NextResponse.json({ status: 'ok' })
-  }
-
-  // ── Ecuador auto-redirect ────────────────────────────────────────────────
-  const metricsPhones = (process.env.METRICS_ALLOWED || '').split(',').map(p => p.trim())
-  if (phone.startsWith('593') && !metricsPhones.includes(phone)) {
-    await sendTextMessage(
-      phone,
-      'Hola 👋 Para Ecuador te atendemos directamente en este número: wa.me/593989131972'
-    ).catch(() => {})
     return NextResponse.json({ status: 'ok' })
   }
 
