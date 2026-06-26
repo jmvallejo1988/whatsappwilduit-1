@@ -1,118 +1,156 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
+import Link from 'next/link'
+import AppShell from '@/components/AppShell'
 
 type Conversation = {
-  phone: string
-  name?: string
-  lastMessage?: string
-  lastTimestamp?: number
-  ts?: number
+    phone: string | number
+    name?: string | number
+    lastMessage?: string
+    lastTimestamp?: number
+    ts?: number
+}
+
+type Label = {
+    id: string
+    name: string
+    color: string
 }
 
 export default function ChatListPage() {
-  const [convos, setConvos] = useState<Conversation[]>([])
-  const [loading, setLoading] = useState(true)
+    const [convos, setConvos] = useState<Conversation[]>([])
+    const [loading, setLoading] = useState(true)
+    const [labels, setLabels] = useState<Label[]>([])
+    const [chatLabels, setChatLabels] = useState<Record<string, string[]>>({})
 
   const load = useCallback(async (silent = false) => {
-    try {
-      const data = await fetch('/api/conversations').then(r => r.json())
-      const raw: Conversation[] = data.conversations || []
+        try {
+                const data = await fetch('/api/conversations').then(r => r.json())
+                const raw: Conversation[] = data.conversations || []
 
-      let items: Conversation[]
-      if (raw.length > 0 && typeof raw[0] === 'object' && 'phone' in raw[0]) {
-        items = raw.map(c => ({
-          phone: String(c.phone),
-          name: c.name ? String(c.name) : undefined,
-          lastMessage: c.lastMessage || '',
-          ts: c.lastTimestamp || 0,
-        }))
-      } else {
-        items = (raw as unknown as string[]).map(p => ({ phone: String(p), ts: 0 }))
-      }
+                        let items: Conversation[]
+                if (raw.length > 0 && typeof raw[0] === 'object' && 'phone' in raw[0]) {
+                          items = raw.map(c => ({
+                                      phone: String(c.phone),
+                                      name: c.name,
+                                      lastMessage: c.lastMessage || '',
+                                      ts: c.lastTimestamp || 0,
+                          }))
+                } else {
+                          const phones = raw.map(c => typeof c === 'string' ? c : String((c as { phone: string }).phone))
+                          items = await Promise.all(
+                                      phones.map(async (phone) => {
+                                                    try {
+                                                                    const msgs = await fetch(`/api/messages?phone=${phone}`).then(r => r.json())
+                                                                    const last = msgs.messages?.[msgs.messages.length - 1]
+                                                                    const text = last?.text || last?.content || ''
+                                                                    return { phone, lastMessage: text.slice(0, 60), ts: last?.timestamp || last?.ts || 0 }
+                                                    } catch {
+                                                                    return { phone, lastMessage: '', ts: 0 }
+                                                    }
+                                      })
+                                    )
+                }
 
-      items.sort((a, b) => (b.ts || 0) - (a.ts || 0))
-      setConvos(items)
-      if (!silent) setLoading(false)
-    } catch {
-      if (!silent) setLoading(false)
-    }
+          items.sort((a, b) => (b.ts || 0) - (a.ts || 0))
+                setConvos(items)
+
+          const labelsData = await fetch('/api/labels').then(r => r.json())
+                setLabels(labelsData.labels || [])
+
+          const chatLabelsMap: Record<string, string[]> = {}
+                  await Promise.all(
+                            items.map(async (c) => {
+                                        const phone = String(c.phone)
+                                        const ld = await fetch(`/api/labels?phone=${phone}`).then(r => r.json())
+                                        chatLabelsMap[phone] = ld.chatLabels || []
+                            })
+                          )
+                setChatLabels(chatLabelsMap)
+
+          if (!silent) setLoading(false)
+        } catch {
+                if (!silent) setLoading(false)
+        }
   }, [])
 
   useEffect(() => {
-    load(false)
-    const interval = setInterval(() => load(true), 8000)
-    return () => clearInterval(interval)
+        load(false)
+        const interval = setInterval(() => load(true), 10000)
+        return () => clearInterval(interval)
   }, [load])
 
+  const getLabelById = (id: string) => labels.find(l => l.id === id)
+
   return (
-    <div style={{ maxWidth: 640, margin: '0 auto', background: '#111b21', minHeight: '100vh' }}>
-      {/* Header */}
-      <div style={{
-        background: '#202c33', padding: '16px 20px',
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        borderBottom: '1px solid #2a3942', position: 'sticky', top: 0, zIndex: 10,
-      }}>
-        <h1 style={{ color: '#e9edef', fontSize: 20, fontWeight: 600, margin: 0 }}>Wilduit WA Manager</h1>
-        <a
-          href="/config"
-          title="Configurar bot"
-          style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            width: 38, height: 38, borderRadius: '50%',
-            background: '#2a3942', color: '#8696a0',
-            fontSize: 18, textDecoration: 'none',
-            transition: 'background 0.15s',
-          }}
-        >
-          ⚙️
-        </a>
-      </div>
-
-      {loading && (
-        <p style={{ color: '#8696a0', fontSize: 14, textAlign: 'center', marginTop: 60 }}>
-          Cargando conversaciones...
-        </p>
-      )}
-      {!loading && convos.length === 0 && (
-        <p style={{ color: '#8696a0', fontSize: 14, textAlign: 'center', marginTop: 60 }}>
-          Sin conversaciones aún. Escribe al número de WhatsApp para iniciar.
-        </p>
-      )}
-
-      {convos.map((c) => {
-        const phone = String(c.phone)
-        const ts = c.ts || 0
-        const timeStr = ts
-          ? new Date(ts).toLocaleTimeString('es-EC', { hour: '2-digit', minute: '2-digit' })
-          : ''
-        return (
-          <a
-            key={phone}
-            href={`/chat/${phone}`}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 14,
-              padding: '12px 20px', textDecoration: 'none',
-              color: '#e9edef', borderBottom: '1px solid #2a3942',
-            }}
-          >
-            <div style={{
-              width: 46, height: 46, borderRadius: '50%',
-              background: '#00a884', color: '#fff',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontWeight: 700, fontSize: 16, flexShrink: 0,
-            }}>
-              {phone.slice(-2)}
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 2 }}>+{phone}</div>
-              <div style={{ color: '#8696a0', fontSize: 13, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                {c.lastMessage || 'Sin mensajes'}
-              </div>
-            </div>
-            {timeStr && <div style={{ color: '#8696a0', fontSize: 12, flexShrink: 0 }}>{timeStr}</div>}
-          </a>
-        )
-      })}
-    </div>
-  )
-}
+        <AppShell activeTab="chats">
+              <div style={{ padding: '8px 0' }}>
+                {loading && (
+                    <p style={{ color: '#555', fontSize: 13, textAlign: 'center', marginTop: 40 }}>Cargando conversaciones...</p>p>
+                      )}
+                {!loading && convos.length === 0 && (
+                    <p style={{ color: '#555', fontSize: 13, textAlign: 'center', marginTop: 40 }}>Sin conversaciones aún.</p>p>
+                      )}
+              
+                {convos.map((c) => {
+                    const phone = String(c.phone)
+                                const ts = c.ts || 0
+                                            const timeStr = ts
+                                                          ? new Date(ts).toLocaleTimeString('es-EC', { hour: '2-digit', minute: '2-digit' })
+                                                          : ''
+                                                        const assignedLabels = (chatLabels[phone] || [])
+                                                                      .map(id => getLabelById(id))
+                                                                      .filter(Boolean) as Label[]
+                                                          
+                                                                    return (
+                                                                                  <Link
+                                                                                                  key={phone}
+                                                                                                  href={`/chat/${phone}`}
+                                                                                                  style={{
+                                                                                                                    display: 'flex',
+                                                                                                                    alignItems: 'center',
+                                                                                                                    gap: 12,
+                                                                                                                    background: '#1a1a1a',
+                                                                                                                    padding: '12px 16px',
+                                                                                                                    textDecoration: 'none',
+                                                                                                                    color: '#fff',
+                                                                                                                    borderBottom: '1px solid #222',
+                                                                                                    }}
+                                                                                                >
+                                                                                                <div style={{
+                                                                                                                  width: 44, height: 44, borderRadius: '50%',
+                                                                                                                  background: '#1e3a2a', color: '#25D366',
+                                                                                                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                                                                                  fontWeight: 700, fontSize: 15, flexShrink: 0,
+                                                                                                  }}>
+                                                                                                  {phone.slice(-2)}
+                                                                                                  </div>div>
+                                                                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                                                                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                                                                                                                                  <span style={{ fontWeight: 600, fontSize: 14 }}>+{phone}</span>span>
+                                                                                                                  {assignedLabels.map(l => (
+                                                                                                                      <span key={l.id} style={{
+                                                                                                                                              background: l.color + '33',
+                                                                                                                                              color: l.color,
+                                                                                                                                              border: `1px solid ${l.color}55`,
+                                                                                                                                              borderRadius: 10,
+                                                                                                                                              padding: '1px 7px',
+                                                                                                                                              fontSize: 10,
+                                                                                                                                              fontWeight: 600,
+                                                                                                                        }}>{l.name}</span>span>
+                                                                                                                    ))}
+                                                                                                                  </div>div>
+                                                                                                                <div style={{ color: '#666', fontSize: 12, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                                                                                                                  {c.lastMessage || 'Sin mensajes'}
+                                                                                                                  </div>div>
+                                                                                                  </div>div>
+                                                                                    {timeStr && (
+                                                                                                                  <div style={{ color: '#444', fontSize: 11, flexShrink: 0 }}>{timeStr}</div>div>
+                                                                                                )}
+                                                                                  </Link>Link>
+                                                                                )
+                })}
+              </div>div>
+        </AppShell>AppShell>
+      )
+}</AppShell>
