@@ -83,23 +83,49 @@ export type GCalEvent = {
   startDatetime: string    // ISO 8601 local e.g. "2026-07-01T10:00:00"
   endDatetime: string      // ISO 8601 local e.g. "2026-07-01T11:00:00"
   timeZone?: string        // default: America/Guayaquil
-  attendeePhone?: string   // for notes only (GCal doesn't support WA)
+  attendeeEmail?: string   // optional — adds attendee and sends invite
+  createMeet?: boolean     // default: true — attach a Google Meet link
 }
 
-/** Create an event and return its GCal event ID */
-export async function createGCalEvent(event: GCalEvent): Promise<string> {
+export type GCalCreatedEvent = {
+  id: string
+  meetLink?: string        // Google Meet URL (if createMeet = true)
+  htmlLink?: string        // URL to open the event in Google Calendar
+}
+
+/** Create an event with optional Google Meet link, return id + meetLink */
+export async function createGCalEvent(event: GCalEvent): Promise<GCalCreatedEvent> {
   const token = await getAccessToken()
   const calId = encodeURIComponent(getCalendarId())
   const tz = event.timeZone ?? 'America/Guayaquil'
+  const withMeet = event.createMeet !== false // default true
 
-  const body = {
+  const requestId = `wilduit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+  const body: Record<string, unknown> = {
     summary: event.summary,
     description: event.description ?? '',
     start: { dateTime: event.startDatetime, timeZone: tz },
     end: { dateTime: event.endDatetime, timeZone: tz },
   }
 
-  const res = await fetch(`${CALENDAR_BASE}/calendars/${calId}/events`, {
+  if (event.attendeeEmail) {
+    body.attendees = [{ email: event.attendeeEmail }]
+  }
+
+  if (withMeet) {
+    body.conferenceData = {
+      createRequest: {
+        requestId,
+        conferenceSolutionKey: { type: 'hangoutsMeet' },
+      },
+    }
+  }
+
+  // conferenceDataVersion=1 required for Meet links
+  const url = `${CALENDAR_BASE}/calendars/${calId}/events${withMeet ? '?conferenceDataVersion=1' : ''}`
+
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -110,7 +136,15 @@ export async function createGCalEvent(event: GCalEvent): Promise<string> {
 
   const data = await res.json()
   if (!res.ok) throw new Error(`GCal create error: ${JSON.stringify(data)}`)
-  return data.id as string
+
+  const meetLink = (data.conferenceData?.entryPoints as Array<{ entryPointType: string; uri: string }> | undefined)
+    ?.find((ep) => ep.entryPointType === 'video')?.uri
+
+  return {
+    id: data.id as string,
+    meetLink,
+    htmlLink: data.htmlLink as string | undefined,
+  }
 }
 
 /** Update an existing event (partial update) */
@@ -182,4 +216,137 @@ export async function deleteGCalEvent(eventId: string): Promise<void> {
 /** Check if GCal integration is configured */
 export function isGCalConfigured(): boolean {
   return !!(process.env.GOOGLE_SERVICE_ACCOUNT_JSON && process.env.GOOGLE_CALENDAR_ID)
+}
+
+// ── AVAILABILITY ──────────────────────────────────────────────────────────────
+
+export type TimeSlot = {
+  date: string      // "2026-07-01"
+  label: string     // "Martes 1 de julio · 9:00 AM – 10:00 AM"
+  start: string     // "09:00 AM"
+  end: string       // "10:00 AM"
+  startIso: string  // full ISO
+  endIso: string    // full ISO
+}
+
+/**
+ * Returns available time slots for the next `daysAhead` days.
+ * Uses the GCal freeBusy API to find busy blocks, then subtracts them.
+ */
+export async function getAvailableSlots(opts?: {
+  daysAhead?: number
+  slotMinutes?: number
+  workStart?: number
+  workEnd?: number
+  tz?: string
+}): Promise<TimeSlot[]> {
+  const daysAhead = opts?.daysAhead ?? 5
+  const slotMinutes = opts?.slotMinutes ?? 60
+  const workStart = opts?.workStart ?? 9
+  const workEnd = opts?.workEnd ?? 18
+  const tz = opts?.tz ?? 'America/Guayaquil'
+  const calId = getCalendarId()
+  const token = await getAccessToken()
+
+  const now = new Date()
+  const windowStart = new Date(now)
+  windowStart.setDate(now.getDate() + 1)
+  windowStart.setHours(0, 0, 0, 0)
+
+  const windowEnd = new Date(now)
+  windowEnd.setDate(now.getDate() + daysAhead + 1)
+  windowEnd.setHours(23, 59, 59, 999)
+
+  // Query freeBusy
+  const fbRes = await fetch(`${CALENDAR_BASE}/freeBusy`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      timeMin: windowStart.toISOString(),
+      timeMax: windowEnd.toISOString(),
+      timeZone: tz,
+      items: [{ id: calId }],
+    }),
+  })
+
+  const fbData = await fbRes.json()
+  if (!fbRes.ok) throw new Error(`GCal freeBusy error: ${JSON.stringify(fbData)}`)
+
+  const busyBlocks: Array<{ start: string; end: string }> =
+    fbData.calendars?.[calId]?.busy ?? []
+
+  const busyMs = busyBlocks.map((b) => ({
+    start: new Date(b.start).getTime(),
+    end: new Date(b.end).getTime(),
+  }))
+
+  const slots: TimeSlot[] = []
+  const slotMs = slotMinutes * 60_000
+
+  for (let d = 1; d <= daysAhead; d++) {
+    const day = new Date(now)
+    day.setDate(now.getDate() + d)
+
+    const dayStart = new Date(day)
+    dayStart.setHours(workStart, 0, 0, 0)
+    const dayEnd = new Date(day)
+    dayEnd.setHours(workEnd, 0, 0, 0)
+
+    let cursor = dayStart.getTime()
+    while (cursor + slotMs <= dayEnd.getTime()) {
+      const slotStart = cursor
+      const slotEnd = cursor + slotMs
+
+      // Overlap check with 5-min buffer
+      const isBusy = busyMs.some(
+        (b) => slotStart < b.end + 5 * 60_000 && slotEnd > b.start - 5 * 60_000
+      )
+
+      if (!isBusy) {
+        const startDate = new Date(slotStart)
+        const endDate = new Date(slotEnd)
+
+        const dateStr = startDate.toLocaleDateString('es-EC', {
+          weekday: 'long', day: 'numeric', month: 'long', timeZone: tz,
+        })
+        const startTime = startDate.toLocaleTimeString('es-EC', {
+          hour: '2-digit', minute: '2-digit', hour12: true, timeZone: tz,
+        })
+        const endTime = endDate.toLocaleTimeString('es-EC', {
+          hour: '2-digit', minute: '2-digit', hour12: true, timeZone: tz,
+        })
+        const isoDate = startDate.toLocaleDateString('en-CA', { timeZone: tz })
+
+        slots.push({
+          date: isoDate,
+          label: `${dateStr.charAt(0).toUpperCase() + dateStr.slice(1)} · ${startTime} – ${endTime}`,
+          start: startTime,
+          end: endTime,
+          startIso: startDate.toISOString(),
+          endIso: endDate.toISOString(),
+        })
+      }
+
+      cursor += slotMs
+    }
+  }
+
+  return slots
+}
+
+/**
+ * Returns a short human-readable bullet list of available slots,
+ * ready to be injected into the bot's system prompt.
+ */
+export async function getAvailabilitySummary(maxSlots = 6): Promise<string> {
+  try {
+    const slots = await getAvailableSlots({ daysAhead: 5 })
+    if (!slots.length) return 'No hay horarios disponibles en los próximos 5 días.'
+    return slots.slice(0, maxSlots).map((s) => `• ${s.label}`).join('\n')
+  } catch {
+    return ''
+  }
 }

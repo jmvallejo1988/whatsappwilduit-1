@@ -6,10 +6,12 @@ export type Appointment = {
   id: string
   phone: string
   name: string
+  email?: string         // client email for email notifications (optional)
   service: string
   datetime: string       // ISO 8601 — e.g. "2026-07-01T10:00:00"
   status: AppointmentStatus
   gcal_event_id?: string
+  meet_link?: string     // Google Meet URL
   notes?: string
   created_at: string
 }
@@ -19,7 +21,7 @@ const APPTS_ZSET = 'appts:all' // sorted set: score = unix ms, member = id
 // ── CRUD ──────────────────────────────────────────────────────────────────────
 
 export async function createAppointment(
-  data: Omit<Appointment, 'id' | 'created_at' | 'status'>
+  data: Omit<Appointment, 'id' | 'created_at' | 'status'> & { email?: string }
 ): Promise<Appointment> {
   const id = crypto.randomUUID()
   const appt: Appointment = {
