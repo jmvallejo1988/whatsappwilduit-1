@@ -17,6 +17,9 @@ function hashPassword(password: string): string {
   return createHash('sha256').update(password + SALT).digest('hex')
 }
 
+// Upstash Redis auto-deserializes JSON — so redis.get() returns the object directly,
+// NOT a string. No JSON.parse() needed.
+
 export async function createUser(email: string, password: string, role: UserRole = 'user'): Promise<void> {
   const key = email.toLowerCase().trim()
   const user: AppUser = {
@@ -25,15 +28,15 @@ export async function createUser(email: string, password: string, role: UserRole
     role,
     createdAt: new Date().toISOString(),
   }
-  await redis.set(`user:${key}`, JSON.stringify(user))
+  // Store as plain object — Upstash serializes it automatically
+  await redis.set(`user:${key}`, user)
   await redis.sadd(USERS_SET, key)
 }
 
 export async function validateUser(email: string, password: string): Promise<AppUser | null> {
   const key = email.toLowerCase().trim()
-  const data = await redis.get(`user:${key}`) as string | null
-  if (!data) return null
-  const user: AppUser = JSON.parse(data)
+  const user = await redis.get(`user:${key}`) as AppUser | null
+  if (!user) return null
   if (user.passwordHash !== hashPassword(password)) return null
   return user
 }
@@ -43,8 +46,8 @@ export async function listUsers(): Promise<AppUser[]> {
   if (!emails.length) return []
   const users: AppUser[] = []
   for (const email of emails) {
-    const data = await redis.get(`user:${email}`) as string | null
-    if (data) users.push(JSON.parse(data))
+    const user = await redis.get(`user:${email}`) as AppUser | null
+    if (user) users.push(user)
   }
   return users.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
 }
@@ -57,9 +60,8 @@ export async function deleteUser(email: string): Promise<void> {
 
 export async function getUserByEmail(email: string): Promise<AppUser | null> {
   const key = email.toLowerCase().trim()
-  const data = await redis.get(`user:${key}`) as string | null
-  if (!data) return null
-  return JSON.parse(data)
+  const user = await redis.get(`user:${key}`) as AppUser | null
+  return user
 }
 
 export async function ensureAdminExists(): Promise<void> {
